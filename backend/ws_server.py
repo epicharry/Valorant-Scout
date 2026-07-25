@@ -12,6 +12,8 @@ import webbrowser
 from http import HTTPStatus
 from urllib.parse import urlparse
 
+from scout_commands import ACK_FIELDS
+
 try:
     from websockets.legacy.server import serve as _ws_serve
     from websockets.exceptions import ConnectionClosed
@@ -26,15 +28,10 @@ from vconstants import APP_VERSION
 
 LOG = scoutlog.get_logger("ws", "websocket")
 
-# Bumped when the frame contract changes incompatibly. The server accepts any
-# protocol in SUPPORTED_PROTOCOLS so a new hosted frontend can keep talking to
-# the previous installed client generation (and vice versa).
 PROTOCOL_VERSION = 1
 SUPPORTED_PROTOCOLS = {1}
 CAPABILITIES = ["state", "commands", "requests", "remote"]
 
-# Structured close codes (shared contract with frontend/lib/transport.js):
-#   4401 auth timeout or bad token · 4403 forbidden origin · 4406 incompatible protocol
 CLOSE_AUTH = 4401
 CLOSE_ORIGIN = 4403
 CLOSE_PROTOCOL = 4406
@@ -99,9 +96,6 @@ async def _process_request(path, request_headers):
     return None
 
 def handshake_headers(path, request_headers):
-    # Extra headers on the actual WS upgrade response. Only echo CORS / the
-    # Private-Network grant to a TRUSTED origin; an untrusted or missing Origin
-    # gets nothing (the handler still closes it with 4403).
     origin = request_headers.get("Origin")
     if origin in ALLOWED_ORIGINS:
         return [
@@ -144,8 +138,6 @@ async def _broadcast(obj) -> None:
         _CLIENTS.discard(ws)
 
 def _self_handshake(ws_port: int, timeout: float = 6.0) -> None:
-    """Prove the server actually accepts an authenticated client before anyone
-    is sent to the dashboard. Raises on failure."""
     from websockets.sync.client import connect as _sync_connect
 
     with _sync_connect(f"ws://127.0.0.1:{ws_port}", open_timeout=timeout,
@@ -160,9 +152,6 @@ def start(*, board_provider, command_router, frontend_url: str, ws_port: int,
           remote_controller=None, request_handler=None,
           poll_interval: float | None = None,
           open_dashboard: bool = True, backend_port: int | None = None) -> str:
-    """Start the bridge. Blocks until the server is bound and has passed an
-    authenticated self-handshake; raises RuntimeError (VS-WS-001) otherwise.
-    Only then is the token considered live / the browser opened."""
     global SESSION_TOKEN, ALLOWED_ORIGINS, _FRONTEND_URL, _WS_PORT
 
     _READY.clear()
@@ -209,8 +198,6 @@ def start(*, board_provider, command_router, frontend_url: str, ws_port: int,
                 await websocket.close(code=CLOSE_AUTH, reason="Invalid token")
                 return
 
-            # Optional protocol negotiation: clients that send one must overlap
-            # with ours; clients that send none are treated as protocol 1.
             client_proto = msg.get("protocol", 1)
             if not isinstance(client_proto, int) or client_proto not in SUPPORTED_PROTOCOLS:
                 LOG.warning("rejected client protocol %r (supported: %s)",
@@ -275,10 +262,7 @@ def start(*, board_provider, command_router, frontend_url: str, ws_port: int,
                         ack = {"type": "command_ack", "id": cid,
                                "ok": bool(result.get("ok")),
                                "message": result.get("message", "")}
-                        for k in ("remoteUrl", "remoteSessionId", "side", "map",
-                                  "status", "agent", "configured", "perMap",
-                                  "rateLimited", "dedup",
-                                  "queue", "queueId", "inQueue"):
+                        for k in ACK_FIELDS:
                             if k in result:
                                 ack[k] = result[k]
                         await _safe_send(websocket, ack)
@@ -311,8 +295,6 @@ def start(*, board_provider, command_router, frontend_url: str, ws_port: int,
                 await _broadcast({"type": "ping"})
 
         async def _main():
-            # Bind first; only a successful bind signals readiness. A failure
-            # (port grabbed between our check and here) lands in boot_error.
             async with _ws_serve(
                 handler, "127.0.0.1", ws_port,
                 process_request=_process_request,
@@ -361,8 +343,6 @@ def start(*, board_provider, command_router, frontend_url: str, ws_port: int,
 
 def _spawn_opener(frontend_url: str, url: str, backend_port: int | None) -> None:
     def _show_fallback() -> None:
-        # The URL contains the per-launch authentication secret. Show it only
-        # in a local dialog, never in stdout/stderr or persistent log files.
         if os.name != "nt":
             _log("couldn't open your browser automatically; restart after setting a default browser")
             return
@@ -388,8 +368,6 @@ def _spawn_opener(frontend_url: str, url: str, backend_port: int | None) -> None
         return False
 
     def _wait_and_open():
-        # The dashboard is only useful once the backend answers; don't send the
-        # user to a board that immediately errors.
         if backend_port and not _wait(f"http://127.0.0.1:{backend_port}/api/health",
                                       time.time() + 60):
             LOG.warning("backend health not confirmed before opening dashboard")

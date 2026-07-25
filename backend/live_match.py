@@ -54,17 +54,14 @@ _LEVEL_CACHE: dict[str, int] = {}
 _KD_FILL_LOCK = threading.Lock()
 _KD_FILLING: set[str] = set()
 
-# per-player caches keyed on "newest match id" instead of a TTL: stats can only
-# change when a new match lands in history, and the history check is on the
-# cheap rate bucket while the data it protects (/mmr/) is on the scarce one
-_KD_CACHE: dict[str, tuple[tuple, tuple, int]] = {}   # puuid -> (result, mids, count)
+_KD_CACHE: dict[str, tuple[tuple, tuple, int]] = {}
 _KD_CACHE_MAX = 300
 
-_MIDS_CACHE: dict[str, tuple[list[str], bool, float]] = {}  # puuid -> (mids, is_comp, at)
+_MIDS_CACHE: dict[str, tuple[list[str], bool, float]] = {}
 _MIDS_TTL = 60.0
 
-_RANK_CACHE: dict[str, tuple[dict, str]] = {}  # puuid -> (rank_info out, newest comp mid)
-_RR_CACHE: dict[str, tuple] = {}               # puuid -> (rr_earned, newest comp mid)
+_RANK_CACHE: dict[str, tuple[dict, str]] = {}
+_RR_CACHE: dict[str, tuple] = {}
 
 _MATCH_DETAIL_CACHE: dict[str, dict] = {}
 _MATCH_DETAIL_MAX = 200
@@ -433,9 +430,6 @@ class LiveMatch:
         return None
 
     def _fresh_mids(self, puuid):
-        """Newest match ids for a player — first non-empty of competitive,
-        unrated, swiftplay, then anything. Cheap history calls only, cached
-        for _MIDS_TTL; returns (mids, is_comp, throttled)."""
         hit = _MIDS_CACHE.get(puuid)
         if hit and time.time() - hit[2] < _MIDS_TTL:
             return hit[0], hit[1], False
@@ -461,18 +455,11 @@ class LiveMatch:
         out = {"tier": 0, "rr": 0, "lb": 0, "peak": 0, "wr": 0, "games": 0,
                "prev": 0, "peak_season": season, "ok": False}
         try:
-            # rank/RR/peak/wr only move via comp matches — reuse the cached
-            # result until a new comp match shows up in history. Only pay for
-            # the history check when there IS a cached rank to validate: cold
-            # first builds go straight to /mmr/ (key adopted on next tick,
-            # once the KD fill has warmed the mids cache).
             hit = _RANK_CACHE.get(puuid)
             if hit:
                 mids, is_comp, _ = self._fresh_mids(puuid)
                 rank_key = mids[0] if (mids and is_comp) else "nocomp"
                 if hit[1] is None:
-                    # ponytail: adopt-key window ≈ one 4s tick; a comp match
-                    # finishing inside it serves one stale rank tick, no worse
                     _cache_put(_RANK_CACHE, _KD_CACHE_MAX, puuid, (hit[0], rank_key))
                     return hit[0]
                 if hit[1] == rank_key:
@@ -569,8 +556,6 @@ class LiveMatch:
         try:
             rr_earned = None
 
-            # comp match ids come from match-history (generous rate bucket),
-            # NOT competitiveupdates (/mmr/ bucket is ~30 req/60s account-wide)
             mids_all, _, throttled = self._fresh_mids(puuid)
             mids = mids_all[:count]
             if not mids:
@@ -685,8 +670,6 @@ class LiveMatch:
                         entry["kd_done"] = True
 
                 def _top_up(puuid):
-                    # phase 2: last-match RR (one /mmr/ call, auto-paced by the
-                    # mmr bucket) + matches 4-5; row upgrades on the next tick
                     entry = _CACHE.get(f"{match_id}:{puuid}")
                     if entry is None or entry.get("kd_full") or entry.get("kd") is None:
                         return
@@ -711,10 +694,8 @@ class LiveMatch:
                         entry["kd"], entry["hs"] = kd, hs
                         entry["intel"] = intel
 
-                # phase 1: 3 comp matches per player -> every row fills fast
                 with ThreadPoolExecutor(max_workers=8) as ex:
                     list(ex.map(_fill_one, puuids))
-                # phase 2: top rows up to 5-match stats in the background
                 with ThreadPoolExecutor(max_workers=4) as ex:
                     list(ex.map(_top_up, puuids))
             finally:
@@ -794,9 +775,6 @@ class LiveMatch:
             if cached is None:
                 rk = self.rank_info(puuid, season, prev_season)
 
-                # kd_done=False even for include_stats=False callers (discord
-                # presence): a stats-less build racing the main loop must not
-                # permanently mark players done — the next stats tick queues them
                 cached = {"rk": rk, "prev": rk.get("prev", 0),
                           "kd": None, "hs": None, "rr_earned": None,
                           "kd_done": False}
@@ -986,9 +964,6 @@ class LiveMatch:
             rk = self.rank_info(puuid, season, prev_season)
             kd = hs = intel = None
             if include_stats:
-                # full 5 games inline: lobbies are <=5 players and not
-                # latency-critical, and the warm cache then serves 5-game
-                # stats instantly when the match starts
                 kd, hs, _, _, intel = self.kd_hs(puuid, count=5)
 
             level = m.get("level", 0) or 0

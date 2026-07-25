@@ -9,6 +9,8 @@ from urllib.parse import quote
 
 import requests
 
+from scout_commands import ACK_FIELDS
+
 try:
     from ably import AblyRealtime
 except Exception:
@@ -320,9 +322,7 @@ class RemoteController:
 
         ack = {"id": cid, "ok": bool(result.get("ok")),
                "message": result.get("message", "")}
-        for k in ("remoteUrl", "remoteSessionId", "side", "map", "status",
-                  "agent", "configured", "rateLimited", "dedup",
-                  "queue", "queueId", "inQueue"):
+        for k in ACK_FIELDS:
             if k in result:
                 ack[k] = result[k]
         try:

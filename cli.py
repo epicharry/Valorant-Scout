@@ -1,20 +1,3 @@
-"""
-cli.py — Valorant Scout in your terminal.
-
-A console scoreboard: every player in your current match with
-Party, Agent, Name (hidden names revealed), Rank, RR, Peak, Previous, Leaderboard,
-HS%, Win-rate, K/D and Level — colour-coded and auto-refreshing.
-
-Pulls live data straight from the local VALORANT client (open the game and join
-agent select / a match). With the game closed it shows a demo lobby.
-
-Usage:
-  python cli.py                 # live table, refreshes every 5s
-  python cli.py --once          # print once and exit
-  python cli.py --interval 3    # custom refresh seconds
-  python cli.py --seed 12       # pick a demo lobby
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -30,15 +13,11 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 os.environ["SCOUT_QUIET"] = "1"
 
-# This console is blank while imports/first fetch run — tell the user what it
-# is. Live(screen=True) switches to the alternate buffer, replacing this text.
 print("\n  Starting Valorant Scout...\n  The scoreboard will appear in this window in a moment.", flush=True)
 
 def _load_env():
     for p in (ROOT / ".env", ROOT / "backend" / ".env"):
         if p.exists():
-            # utf-8-sig / replace: hand-edited .env with a BOM or stray byte
-            # must not corrupt the first key or crash the CLI at import time.
             for line in p.read_text(encoding="utf-8-sig", errors="replace").splitlines():
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
@@ -68,10 +47,6 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 if os.name == "nt":
-    # Enable ANSI/VT on our own fresh console (run.py spawns us with
-    # CREATE_NEW_CONSOLE, which starts without it). With VT on, rich uses its
-    # modern renderer instead of the flickery legacy-conhost fallback
-    # (STD_OUTPUT_HANDLE = -11; mode 7 = processed|wrap|virtual-terminal).
     try:
         import ctypes
         _k32 = ctypes.windll.kernel32
@@ -82,8 +57,6 @@ if os.name == "nt":
 console = Console()
 
 def _set_window_title(title: str) -> None:
-    # run.py spawns us in a fresh console with no title, so Windows labels the
-    # window by its host exe (python.exe / conhost) — inconsistent across PCs.
     try:
         if os.name == "nt":
             import ctypes
@@ -94,16 +67,11 @@ def _set_window_title(title: str) -> None:
     except Exception:
         pass
 
-# ── Backend bridge (run.py launches us with --bridge) ────────────────────────
-# In normal Scout operation the backend is the ONLY Riot fetcher: we render the
-# board it broadcasts over the local WebSocket bridge and never touch Riot
-# ourselves — not even while disconnected. Standalone `python cli.py` (no flag)
-# is the explicit direct-fetch mode and skips all of this.
 _BRIDGE_PATH = ROOT / ".scout" / "bridge.json"
 _BRIDGE_MODE = False
 _BRIDGE_LOCK = threading.Lock()
 _BRIDGE = {"board": None, "connected": False}
-_BRIDGE_STOP = threading.Event()  # tests only — lets a test retire the thread
+_BRIDGE_STOP = threading.Event()
 
 def _bridge_loop() -> None:
     from websockets.sync.client import connect as _ws_connect
@@ -117,8 +85,6 @@ def _bridge_loop() -> None:
                 if json.loads(ws.recv(timeout=5)).get("type") != "auth_ok":
                     raise RuntimeError("bridge auth rejected")
                 while True:
-                    # Server pings every 30s, so a healthy link always yields a
-                    # frame; 60s of silence means a hung backend — reconnect.
                     msg = json.loads(ws.recv(timeout=60))
                     if _BRIDGE_STOP.is_set():
                         return
@@ -130,8 +96,6 @@ def _bridge_loop() -> None:
                     elif mtype == "ping":
                         ws.send(json.dumps({"type": "pong"}))
         except Exception:
-            # Covers it all: backend not up yet, stale bridge.json from a
-            # previous run, backend restart with a new token, mid-game crash.
             with _BRIDGE_LOCK:
                 _BRIDGE["connected"] = False
             time.sleep(2.0)
@@ -316,17 +280,10 @@ def main():
         return
 
     def board_key(board: dict) -> str:
-        # `session` carries wall-clock timestamps that change every call; the
-        # CLI doesn't render it, so keep it out of the change detection.
         slim = {k: v for k, v in board.items() if k != "session"}
         return json.dumps(slim, sort_keys=True, default=str)
 
     try:
-        # We redraw on our own interval; auto_refresh would repaint the whole
-        # screen ~4x/s (constant flicker in screen mode) for no benefit. And we
-        # only repaint when the board actually CHANGED — a full-screen repaint
-        # of identical content is visible flicker on legacy conhost (Windows
-        # Sandbox, no Windows Terminal).
         board = build_board(args.seed)
         prev = board_key(board)
         with Live(render(board), console=console,
@@ -347,8 +304,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         pass
     except Exception:
-        # The CLI runs in its own console that closes on crash — persist the
-        # traceback so the failure is diagnosable afterwards.
         import traceback
         try:
             import scoutlog

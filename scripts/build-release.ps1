@@ -87,6 +87,28 @@ try {
         Copy-Item -Force $src $dst
     }
 
+    # ---- strip comments (staging only) --------------------------------------
+    # Comments and docstrings are working notes; the public artifact ships
+    # without them. This edits the STAGE, never the working tree. Runs before
+    # the secret scan so any developer path living in a comment is already gone
+    # by the time the scan looks.
+    Step "Stripping comments + docstrings from the staged Python ..."
+    # EAP=Continue: under the file-global Stop, PS5.1 turns a native command's
+    # stderr into a terminating error, pre-empting these exit-code checks.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $VenvPy (Join-Path $PSScriptRoot "strip_comments.py") $stage
+        if ($LASTEXITCODE -ne 0) { Fail-Build "comment stripping failed - refusing to build." }
+        # A stripped tree that will not byte-compile must never reach the zip.
+        & $VenvPy -m compileall -q $stage 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { Fail-Build "staged Python does not byte-compile after stripping." }
+    } finally { $ErrorActionPreference = $prevEap }
+    # compileall leaves __pycache__ behind, which the staging scan forbids.
+    Get-ChildItem -Path $stage -Recurse -Directory -Filter "__pycache__" |
+        Remove-Item -Recurse -Force
+    Ok "Comments stripped and the staged tree byte-compiles."
+
     Step "Scanning the staged tree for secrets, caches and developer paths ..."
     $textExt = @(".py", ".ps1", ".bat", ".md", ".txt", ".json", ".example", ".gitignore", ".gitattributes")
     foreach ($file in (Get-ChildItem -Path $stage -Recurse -File)) {

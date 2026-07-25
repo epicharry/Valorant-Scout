@@ -7,6 +7,7 @@ import threading
 import time
 
 import encounter_log
+import history
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 _PATH = os.path.join(_DATA_DIR, "session.json")
@@ -116,7 +117,7 @@ def _push_session_point(recap: dict) -> None:
         _SESSION["points"] = []
         _STATE["recorded"] = set()
     _SESSION["lastAt"] = now
-    _SESSION["points"].append({
+    point = {
         "matchId": recap["matchId"],
         "ts": now,
         "map": recap.get("map"),
@@ -124,9 +125,14 @@ def _push_session_point(recap: dict) -> None:
         "delta": recap.get("rrDelta"),
         "tier": recap.get("tierAfter"),
         "rr": recap.get("rrAfter"),
-    })
+    }
+    _SESSION["points"].append(point)
     _SESSION["points"] = _SESSION["points"][-_MAX_POINTS:]
     _save_session()
+    try:
+        history.record(dict(point))
+    except Exception:
+        pass
 
 def observe(board: dict, lm) -> None:
     pass

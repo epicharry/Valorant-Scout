@@ -53,9 +53,6 @@ except ValueError:
 _RIOT_BURST = _RIOT_MAX_RPS if _RIOT_MAX_RPS > 0 else 1.0
 _RIOT_BUCKET = {"tokens": _RIOT_BURST, "at": 0.0}
 
-# /mmr/* endpoints share one server-side bucket: ~30 req per 60s window, then a
-# real 60s block (429 Retry-After=60). match-details/history are far more generous.
-# ponytail: constants measured live 2026-07-16; re-probe if Riot changes limits
 _MMR_BURST = 24.0
 _MMR_RPS = 0.4
 _MMR_BUCKET = {"tokens": _MMR_BURST, "at": 0.0}
@@ -66,7 +63,6 @@ def _family(endpoint: str) -> str:
     return "mmr" if endpoint.startswith("/mmr/") else "other"
 
 def held_secs(endpoint: str) -> float:
-    """Seconds until this endpoint's family may dispatch again (0 = clear)."""
     with _RIOT_RATE_LOCK:
         return max(0.0, _HOLD_UNTIL[_family(endpoint)] - time.time())
 
@@ -100,6 +96,10 @@ def _riot_throttle(endpoint: str = "") -> None:
     if _family(endpoint) == "mmr":
         _take_token(_MMR_BUCKET, _MMR_BURST, _MMR_RPS)
     _take_token(_RIOT_BUCKET, _RIOT_BURST, _RIOT_MAX_RPS)
+
+class ClientNotReady(Exception):
+    pass
+
 
 class LocalAuth:
     pass
@@ -201,9 +201,16 @@ class LocalAuth:
             return self._headers
         local = {"Authorization": "Basic " + base64.b64encode(
             ("riot:" + self.lockfile["password"]).encode()).decode()}
-        ent = requests.get(
+        resp = requests.get(
             f"https://127.0.0.1:{self.lockfile['port']}/entitlements/v1/token",
-            headers=local, verify=False, timeout=5).json()
+            headers=local, verify=False, timeout=5)
+        try:
+            ent = resp.json()
+        except ValueError:
+            ent = None
+        if not isinstance(ent, dict) or not all(
+                k in ent for k in ("subject", "accessToken", "token")):
+            raise ClientNotReady(f"entitlements not ready (HTTP {resp.status_code})")
         self.puuid = ent["subject"]
         self._headers = {
             "Authorization": f"Bearer {ent['accessToken']}",
@@ -249,9 +256,6 @@ class LocalAuth:
                                 verify=False, timeout=8)
             if resp.status_code == 429:
 
-                # hold the whole endpoint family for the full Retry-After
-                # (a 60s window capped to 30s just guarantees another 429);
-                # _riot_throttle waits it out for every thread, incl. our retry
                 try:
                     ra = float(resp.headers.get("Retry-After") or 0)
                 except (TypeError, ValueError):

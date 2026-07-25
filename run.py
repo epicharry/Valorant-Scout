@@ -1,20 +1,3 @@
-"""
-run.py — launcher for Valorant Scout.
-
-Startup NEVER installs anything (no venv creation, no pip, no npm, no builds).
-install.bat owns installation and repair; this file only:
-  1. Loads environment from .env / backend/.env (no extra deps required).
-  2. Validates the installed runtime fast and offline (VS-PY-001 / VS-DEPS-001
-     point the user at install.bat).
-  3. Picks free ports (never killing foreign processes), spawns the backend,
-     waits for it to be healthy, and opens the terminal scoreboard.
-
-The live scoreboard needs no PUUID — your running client identifies you. With
-VALORANT closed it shows a demo lobby so the UI is always explorable.
-
-Press Ctrl+C to stop everything.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -42,7 +25,7 @@ sys.path.insert(0, str(BACKEND))
 try:
     import scoutlog
     LOG = scoutlog.get_logger("launcher")
-except Exception:  # a broken checkout must still be able to print an error
+except Exception:
     import logging
     LOG = logging.getLogger("launcher")
     LOG.addHandler(logging.NullHandler())
@@ -65,11 +48,6 @@ if IS_WIN:
         import ctypes
         from ctypes import wintypes
         _k32 = ctypes.windll.kernel32
-        # HANDLE is a 64-bit pointer; ctypes' default c_int restype truncates and
-        # sign-extends values >= 0x80000000, corrupting the handle on its way back
-        # into WaitForSingleObject/CloseHandle — which would make startup wrongly
-        # report "already running". windll caches these function objects, so
-        # declaring the prototypes once here covers every later call site.
         _k32.CreateMutexW.restype = wintypes.HANDLE
         _k32.CreateMutexW.argtypes = (wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR)
         _k32.WaitForSingleObject.restype = wintypes.DWORD
@@ -82,8 +60,6 @@ if IS_WIN:
             wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
         _k32.GetStdHandle.restype = wintypes.HANDLE
         _k32.SetConsoleMode.argtypes = (wintypes.HANDLE, wintypes.DWORD)
-        # Enable ANSI/VT escape processing on the Windows console without shelling
-        # out (STD_OUTPUT_HANDLE = -11; mode 7 = processed|wrap|virtual-terminal).
         _k32.SetConsoleMode(_k32.GetStdHandle(-11), 7)
     except Exception:
         pass
@@ -95,9 +71,6 @@ C_OK = "\033[38;5;78m"
 C_WARN = "\033[38;5;214m"
 C_END = "\033[0m"
 
-# Attached single-console mode (start.ps1 sets this): the scoreboard renders in
-# THE SAME console we run in, so our own chatter must stay off the screen —
-# it goes to launcher.log instead.
 ATTACHED = os.environ.get("VS_ATTACHED_CLI", "").strip() == "1"
 
 def say(msg, color=C_TEAL):
@@ -119,7 +92,6 @@ def die(code: str, msg: str) -> "NoReturn":
     sys.exit(1)
 
 def _fatal_dialog(message: str) -> None:
-    # start.bat runs us hidden; a fatal error must still be visible.
     if not (IS_WIN and "--prod" in sys.argv):
         return
     try:
@@ -135,8 +107,6 @@ def load_env():
     for path in (ROOT / ".env", BACKEND / ".env"):
         if not path.exists():
             continue
-        # utf-8-sig: users edit .env by hand; an editor-added BOM must not
-        # corrupt the first key, and a stray non-UTF8 byte must not crash startup.
         for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -149,11 +119,9 @@ def venv_python() -> Path:
     return ROOT / ".venv" / ("Scripts/python.exe" if IS_WIN else "bin/python")
 
 def resolve_python() -> str:
-    """Pick the interpreter to run the app with. Never installs anything."""
     py = venv_python()
     if py.exists():
         return str(py)
-    # Developer fallback: whoever is running run.py directly with deps present.
     if subprocess.run([sys.executable, "-c", "import flask"],
                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
         return sys.executable
@@ -162,9 +130,6 @@ def resolve_python() -> str:
         "Run install.bat to set up Valorant Scout.")
 
 def validate_runtime(py: str) -> None:
-    """Fast offline check that the installed packages can actually load."""
-    # start.ps1 just ran these exact probes (Test-Venv); don't spend 2-4s
-    # re-running them. Direct `python run.py` (dev) still validates.
     if os.environ.get("VS_PREVALIDATED", "").strip() == "1":
         return
     exact = ROOT / "scripts" / "verify_installed.py"
@@ -180,7 +145,7 @@ def validate_runtime(py: str) -> None:
                 "Run install.bat to repair (your settings and data are kept).")
     smoke = ROOT / "scripts" / "import_smoke.py"
     if not smoke.exists():
-        return  # stray copy without scripts/ — let the app try
+        return
     r = subprocess.run([py, str(smoke)], capture_output=True, text=True)
     if r.returncode != 0:
         LOG.error("VS-DEPS-001 import smoke failed:\n%s", r.stderr.strip())
@@ -188,19 +153,9 @@ def validate_runtime(py: str) -> None:
             "Installed packages are broken or missing. "
             "Run install.bat to repair (your settings and data are kept).")
 
-# ---------------------------------------------------------------------------
-# Single instance — a second launch must not spawn a second stack.
-# ---------------------------------------------------------------------------
-_INSTANCE_LOCK = None  # keep a reference so the handle lives for the process
+_INSTANCE_LOCK = None
 
 def _path_fingerprint() -> str:
-    """Fingerprint of the install folder. MUST stay byte-identical to
-    Get-PathFingerprint in scripts/common.ps1 on every path:
-      * use abspath (NOT resolve) so the invocation form matches what
-        $PSScriptRoot sees — no junction/8.3 expansion;
-      * ASCII-only lowercasing (map 'A'-'Z' only) so İ (U+0130) / ẞ (U+1E9E)
-        don't diverge from .NET invariant lowering, which str.lower() would.
-    """
     base = os.path.dirname(os.path.abspath(__file__)).rstrip("\\")
     lowered = "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in base)
     return hashlib.sha256(lowered.encode("utf-8")).hexdigest()[:16].upper()
@@ -209,9 +164,6 @@ def _mutex_name(purpose: str) -> str:
     return rf"Local\ValorantScout-{purpose}-{_path_fingerprint()}"
 
 def _my_process_tree() -> set[int]:
-    """Our own pid plus a few ancestors. A Store-Python venv runs us as a CHILD
-    of the venv redirector stub — killing the stub (its cmdline also contains
-    run.py) would kill us, so the whole ancestry must be exempt from takeover."""
     mine = {os.getpid()}
     pid = os.getpid()
     for _ in range(4):
@@ -223,13 +175,10 @@ def _my_process_tree() -> set[int]:
     return mine
 
 def _kill_leftover_instances() -> bool:
-    """Kill a previous run.py of THIS install (and its tree). Returns True if
-    anything was killed. Never touches processes outside this folder."""
     if not IS_WIN:
         return False
     mine = _my_process_tree()
     pids = set()
-    # Fast path: the old launcher recorded its pid.
     try:
         state = json.loads((SCOUT_DIR / "runtime-state.json").read_text(encoding="utf-8"))
         pid = int(state.get("pid", 0))
@@ -237,9 +186,6 @@ def _kill_leftover_instances() -> bool:
             pids.add(pid)
     except Exception:
         pass
-    # Fallback: a mid-shutdown instance may already have removed the state file.
-    # Match "<this folder>\run.py" in the command line — full-path prefix, so a
-    # sibling install can never match. Path goes via env var (no PS quoting games).
     try:
         env = os.environ.copy()
         env["VS_MATCH"] = (str(ROOT).rstrip("\\") + os.sep + "run.py").lower()
@@ -273,17 +219,8 @@ def acquire_instance_lock() -> bool:
         handle = ctypes.windll.kernel32.CreateMutexW(None, False, _mutex_name("App"))
         if not handle:
             raise OSError("CreateMutexW failed")
-        # A handle is not ownership (PowerShell's New-ScoutMutex tests ownership
-        # with WaitOne(0)). Try to take it: WAIT_OBJECT_0 = free, WAIT_ABANDONED
-        # = the previous owner died (e.g. start.bat just killed it) — both mean
-        # we own it now. Only a LIVE instance yields WAIT_TIMEOUT. Deciding on
-        # ERROR_ALREADY_EXISTS instead would wrongly refuse an abandoned mutex.
         wait = ctypes.windll.kernel32.WaitForSingleObject(handle, 0)
-        if wait not in (0, 0x80):  # not WAIT_OBJECT_0 / WAIT_ABANDONED
-            # A previous instance still holds the lock (e.g. the user closed the
-            # scoreboard and relaunched immediately). Kill it and take over —
-            # relaunching should always win. The killed owner leaves the mutex
-            # ABANDONED, which wakes this wait instantly.
+        if wait not in (0, 0x80):
             if _kill_leftover_instances():
                 wait = ctypes.windll.kernel32.WaitForSingleObject(handle, 3000)
             if wait not in (0, 0x80):
@@ -301,14 +238,12 @@ def release_instance_lock() -> None:
         return
     try:
         import ctypes
-        ctypes.windll.kernel32.ReleaseMutex(_INSTANCE_LOCK)  # give up ownership
+        ctypes.windll.kernel32.ReleaseMutex(_INSTANCE_LOCK)
         ctypes.windll.kernel32.CloseHandle(_INSTANCE_LOCK)
     finally:
         _INSTANCE_LOCK = None
 
 def write_runtime_state(backend_port: int, ws_port: int, frontend_port: str) -> None:
-    # Best-effort: the state file helps install/update find us to take over,
-    # but a locked/synced .scout folder must not kill startup.
     try:
         SCOUT_DIR.mkdir(exist_ok=True)
         path = SCOUT_DIR / "runtime-state.json"
@@ -330,15 +265,11 @@ def clear_runtime_state() -> None:
     except OSError:
         pass
 
-# ---------------------------------------------------------------------------
-# Ports — kill only our own stale instances; foreign occupants mean we move
-# to a free alternate port and propagate it everywhere.
-# ---------------------------------------------------------------------------
 def _pid_exe(pid: int) -> str:
     try:
         import ctypes
         k32 = ctypes.windll.kernel32
-        h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        h = k32.OpenProcess(0x1000, False, pid)
         if not h:
             return ""
         try:
@@ -366,11 +297,6 @@ def _proc_info(pid: int):
         return "", "", 0
 
 def _is_ours(pid: int) -> bool:
-    # Store-Python venvs run the listener as a child of the venv wrapper, so the
-    # ROOT path may only appear on a parent; walk up a few hops. The whole walk
-    # happens in ONE powershell call — each spawn costs seconds on a cold
-    # machine and this sits on the startup path. Path goes via env var (no PS
-    # quoting games); prefix ends with \ so "<root>-old" can never match.
     prefix = (str(ROOT).rstrip("\\") + os.sep).lower()
     env = os.environ.copy()
     env["VS_PREFIX"] = prefix
@@ -422,14 +348,11 @@ def _port_pids(port) -> set[int]:
     return pids
 
 def _kill_our_stale(port) -> bool:
-    """Kill processes on `port` ONLY if they run from our folder.
-    Returns True if anything was killed (so the caller knows whether waiting
-    for the port to free up is worthwhile at all)."""
     if not IS_WIN:
         return False
     killed = False
     root = str(ROOT).lower()
-    prefix = root.rstrip("\\") + os.sep  # boundary so "<root>-old" can't match
+    prefix = root.rstrip("\\") + os.sep
     for pid in _port_pids(port):
         exe = _pid_exe(pid).lower()
         if exe == root or exe.startswith(prefix) or _is_ours(pid):
@@ -448,17 +371,13 @@ def _kill_our_stale(port) -> bool:
     return killed
 
 def choose_port(preferred, label: str, reserved=()) -> int:
-    """Return a usable port, preferring `preferred`. Never kills foreign processes."""
     preferred = int(preferred)
     reserved = {int(port) for port in reserved}
     if preferred not in reserved and _port_free(preferred):
         return preferred
     if preferred not in reserved:
-        # Only wait for the port to free up if we actually killed something —
-        # a FOREIGN holder never releases it, and this loop used to burn a
-        # guaranteed 5s per busy port for nothing.
         if _kill_our_stale(preferred):
-            for _ in range(20):  # taskkill is async — give the socket a moment to free up
+            for _ in range(20):
                 if _port_free(preferred):
                     return preferred
                 time.sleep(0.25)
@@ -492,9 +411,6 @@ def wait_http(url: str, timeout: float, label: str) -> bool:
     warn(f"{label} did not respond at {url} within {int(timeout)}s.")
     return False
 
-# ---------------------------------------------------------------------------
-# Child processes
-# ---------------------------------------------------------------------------
 def node_cmd() -> str:
     cmd = "node.exe" if IS_WIN else "node"
     executable = shutil.which(cmd)
@@ -504,7 +420,6 @@ def node_cmd() -> str:
     try:
         version = subprocess.run([executable, "--version"], capture_output=True,
                                  text=True, timeout=10, check=True).stdout.strip().lstrip("v")
-        # keep digits only so prerelease tags ("21.0.0-nightly") still parse
         parts = tuple(int(re.sub(r"\D.*$", "", part) or 0) for part in version.split(".")[:3])
         if parts < (18, 17, 0):
             raise ValueError(version)
@@ -525,10 +440,6 @@ def _rotate(path: Path, max_bytes: int = 2 * 1024 * 1024, backups: int = 5) -> N
         pass
 
 def backend_output(prod: bool):
-    """In hidden/prod mode capture the backend's RAW console into
-    .scout/backend-console.log so fatal output is never discarded; in dev keep
-    it on the console. This is a separate file from scoutlog's redacted,
-    rotated .scout/backend.log — two writers must not share one file."""
     if not prod:
         return None
     try:
@@ -562,14 +473,10 @@ def _hidden_window() -> dict:
 
 def spawn_cli_window(py: str):
     extra = [a for a in sys.argv[1:] if a not in ("--cli", "--no-cli", "--prod")]
-    # A backend is being spawned alongside us — the CLI must attach to its
-    # board bridge and never fetch from Riot itself (one fetcher per launch).
     extra.append("--bridge")
     cli = str(ROOT / "cli.py")
     try:
         if IS_WIN and ATTACHED:
-            # Single-window mode: the scoreboard renders in OUR console (the
-            # one start.bat opened with the progress bar) — no new window.
             proc = subprocess.Popen([py, cli, *extra])
         elif IS_WIN:
             proc = subprocess.Popen([py, cli, *extra],
@@ -588,14 +495,9 @@ def spawn_cli_window(py: str):
              f"Run it manually with: python run.py --cli")
         return None
 
-# Pids the console-close handler must take down with us (backend). In attached
-# mode the whole stack shares ONE console; clicking X sends CTRL_CLOSE_EVENT to
-# every attached process, but the backend (own process group, may ignore it)
-# gets force-killed here so it can never orphan. The handler has a ~5s budget.
 _CTRL_KILL_PIDS: list[int] = []
-_CTRL_HANDLER_REF = None  # keep the ctypes callback alive (GC would unhook it)
-_CLOSING = False  # set by the close handler; the monitor loop must not treat
-                  # the resulting child deaths as crashes (no error dialog)
+_CTRL_HANDLER_REF = None
+_CLOSING = False
 
 def _install_console_close_handler() -> None:
     if not (IS_WIN and ATTACHED):
@@ -607,7 +509,6 @@ def _install_console_close_handler() -> None:
         HandlerRoutine = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
 
         def _handler(event):
-            # CTRL_CLOSE_EVENT=2, CTRL_LOGOFF_EVENT=5, CTRL_SHUTDOWN_EVENT=6
             if event in (2, 5, 6):
                 global _CLOSING
                 _CLOSING = True
@@ -619,7 +520,7 @@ def _install_console_close_handler() -> None:
                     clear_runtime_state()
                 except Exception:
                     pass
-            return False  # let the default handler terminate us
+            return False
 
         _CTRL_HANDLER_REF = HandlerRoutine(_handler)
         ctypes.windll.kernel32.SetConsoleCtrlHandler(_CTRL_HANDLER_REF, True)
@@ -627,9 +528,6 @@ def _install_console_close_handler() -> None:
         LOG.debug("couldn't install console close handler", exc_info=True)
 
 def shutdown(procs, grouped=()) -> None:
-    """Ask children to exit, then force the stragglers. Budget: < 4s total —
-    closing the scoreboard must feel instant, so one short graceful window
-    (2s) then straight to a tree force-kill."""
     alive = [p for p in procs if p.poll() is None]
     grouped = set(grouped)
     for p in alive:
@@ -708,11 +606,6 @@ def main():
     grouped = set()
     backend_log_fh = None
     try:
-        # Open the scoreboard IMMEDIATELY — cli.py reads the Valorant client
-        # directly, so it needs neither the backend nor port selection.
-        # Identifying who owns a busy port can take seconds (netstat + WMI);
-        # none of that may delay the scoreboard. The try/finally covers the
-        # spawn, so any startup failure below still tears the window down.
         if with_cli:
             cli_proc = spawn_cli_window(py)
             if cli_proc is not None:
@@ -819,10 +712,6 @@ def main():
                     continue
                 role = roles.get(p, "child")
                 if role == "backend":
-                    # Window-X / logoff / shutdown: CTRL_CLOSE kills every
-                    # console-attached process, so the backend dying with
-                    # STATUS_CONTROL_C_EXIT is the app CLOSING, not crashing —
-                    # this loop can observe it before we're terminated ourselves.
                     if _CLOSING or (ATTACHED and p.returncode in (0xC000013A, -1073741510)):
                         LOG.info("backend exited with console-close status; shutting down")
                         stop = True
@@ -837,7 +726,6 @@ def main():
                     die("VS-FRONTEND-001",
                         f"The local frontend stopped unexpectedly (exit {p.returncode}).")
                 if role == "scoreboard":
-                    # Closing the scoreboard window IS how users quit the app.
                     say("Scoreboard closed — shutting down.", C_WARN)
                     LOG.info("scoreboard window closed; shutting down")
                     stop = True
@@ -852,15 +740,11 @@ def main():
                 backend_log_fh.close()
             except OSError:
                 pass
-        # Release the mutex BEFORE clearing the state file: the reverse order
-        # leaves a window where a relauncher sees nothing to kill (no state
-        # file) while the mutex is still held.
         release_instance_lock()
         clear_runtime_state()
         say("Bye.", C_DIM)
 
 def _report_crash():
-    # start.bat runs us in a hidden window: without this, any startup failure is invisible.
     import traceback
     tb = traceback.format_exc()
     print(tb, file=sys.stderr)

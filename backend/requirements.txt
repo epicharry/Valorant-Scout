@@ -14,6 +14,7 @@ pypresence==4.6.1      # Discord Rich Presence (optional; degrades if Discord/li
 websockets==13.1       # local WebSocket bridge for the hosted frontend
 ably==2.0.12           # remote/phone mode over Ably (optional; local mode works without it)
 valclient==2.28        # local Riot client API (career/match-history endpoints)
+cryptography==49.0.0   # offline-mode: convert Deceive's PKCS#12 chat cert -> PEM
 
 # --- transitive dependencies ---
 # pip installs these anyway; pinned so the resolver can't swap in a new version
@@ -22,9 +23,11 @@ valclient==2.28        # local Riot client API (career/match-history endpoints)
 anyio==4.13.0
 blinker==1.9.0
 certifi==2026.5.20
+cffi==2.0.0            # via cryptography
 charset-normalizer==3.4.7
 click==8.4.1
 colorama==0.4.6
+pycparser==2.22        # via cffi
 h11==0.16.0
 h2==4.3.0
 hpack==4.1.0

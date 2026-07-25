@@ -23,17 +23,16 @@ import live_match
 import party_detector
 import sample_match
 import session_tracker
+import history
+import inventory
 from agents import AGENTS, resolve_agent
 from instalock_worker import InstalockWorker
-from riot_client import REGIONS, LocalAuth, RiotClient
+from riot_client import REGIONS, LocalAuth, RiotClient, ClientNotReady
 from vconstants import APP_VERSION, STATES, rank_from_tier
 
 app = Flask(__name__)
 CORS(app)
 
-# Flask's logger also writes to .scout/backend.log (rotated + redacted) via
-# scoutlog; run.py separately captures this process's raw console into
-# .scout/backend-console.log, so hidden-mode failures are never lost.
 for _h in scoutlog.get_logger("backend").handlers:
     app.logger.addHandler(_h)
 
@@ -213,14 +212,11 @@ def _client_notice() -> dict:
             "message": "Couldn't read VALORANT — please restart your game "
                        "(close it completely and relaunch), then try again."}
 
-_LAST_GOOD = {"board": None, "at": 0.0}
+_LAST_GOOD = {"board": None, "at": 0.0, "notReady": False}
 _HOLD_SECS = 12
 
-# Single-flight board building: the WS broadcast loop, per-connect sends, the
-# Ably publisher, /api/live and _current_weapons all funnel through build_live —
-# one build per tick serves every consumer instead of stacking Riot calls.
 _BUILD_LOCK = threading.Lock()
-_BUILD_FRESH = 3.5  # ponytail: just under WS_STATE_POLL (4s) so every broadcast tick still builds fresh
+_BUILD_FRESH = 3.5
 
 def build_live(seed: int = 7, want_state: str | None = None) -> dict:
     pass
@@ -235,6 +231,7 @@ def build_live(seed: int = 7, want_state: str | None = None) -> dict:
                     include_stats=os.getenv("LIVE_INCLUDE_STATS", "true").lower() != "false"
                 )
                 board.setdefault("sourceDetail", "Local VALORANT client")
+                board["selfPuuid"] = lm.self_puuid
 
                 try:
                     session_tracker.observe(board, lm)
@@ -250,9 +247,15 @@ def build_live(seed: int = 7, want_state: str | None = None) -> dict:
                 board["appVersion"] = APP_VERSION
                 sync.observe(board)
                 _LAST_GOOD["board"], _LAST_GOOD["at"] = board, time.time()
+                _LAST_GOOD["notReady"] = False
                 return board
             except Exception as e:
-                app.logger.exception("live scoreboard failed")
+                if isinstance(e, ClientNotReady):
+                    if not _LAST_GOOD["notReady"]:
+                        app.logger.info("live scoreboard: %s — waiting for sign-in", e)
+                        _LAST_GOOD["notReady"] = True
+                else:
+                    app.logger.exception("live scoreboard failed")
 
                 if _LAST_GOOD["board"] and time.time() - _LAST_GOOD["at"] < _HOLD_SECS:
                     return _LAST_GOOD["board"]
@@ -311,6 +314,32 @@ def recap():
     except (TypeError, ValueError):
         seed = 7
     return jsonify(live_recap or sample_match.recap(seed))
+
+def _insights_payload() -> dict:
+    if _live_enabled():
+        try:
+            history.refresh(LocalAuth())
+        except Exception:
+            app.logger.exception("rr history refresh failed")
+    return history.payload()
+
+@app.get("/api/insights")
+def insights():
+    return jsonify(_insights_payload())
+
+def _inventory_payload() -> dict:
+    if not _live_enabled():
+        return {"available": False, "error": "Live client not available."}
+    try:
+        return inventory.snapshot(LocalAuth())
+    except Exception:
+        app.logger.exception("inventory snapshot failed")
+        return {"available": False,
+                "error": "Couldn't read your collection from the Riot client."}
+
+@app.get("/api/inventory")
+def inventory_route():
+    return jsonify(_inventory_payload())
 
 @app.get("/api/encounters/<puuid>")
 def encounter(puuid: str):
@@ -404,6 +433,28 @@ def dodge():
     body = request.get_json(silent=True) or {}
     result = client.dodge(dry_run=bool(body.get("dryRun", True)),
                           region=body.get("region"))
+    return jsonify(result), (200 if result.get("ok") else 400)
+
+@app.post("/api/launch-offline")
+def launch_offline():
+    import offline_launch
+    body = request.get_json(silent=True) or {}
+    result = offline_launch.launch(body.get("status"))
+    return jsonify(result), (200 if result.get("ok") else 400)
+
+@app.get("/api/offline-status")
+def offline_status():
+    import offline_launch
+    return jsonify(offline_launch.status())
+
+@app.post("/api/offline-toggle")
+def offline_toggle():
+    import offline_launch
+    body = request.get_json(silent=True) or {}
+    if "status" in body:
+        result = offline_launch.set_status(str(body["status"]))
+    else:
+        result = offline_launch.set_enabled(bool(body.get("enabled", True)))
     return jsonify(result), (200 if result.get("ok") else 400)
 
 @app.get("/api/queue")
@@ -552,6 +603,12 @@ def handle_data_request(req_type: str, params: dict | None) -> dict:
             if _live_enabled():
                 return {"players": encounter_log.get_all()}
             return {"players": sample_match.encounters(int(params.get("seed") or 7))}
+
+        if req_type == "insights":
+            return _insights_payload()
+
+        if req_type == "inventory":
+            return _inventory_payload()
     except Exception as e:
         return {"error": f"request failed: {e}"}
     return {"error": f"unknown request '{req_type}'"}
@@ -591,18 +648,12 @@ def _start_ws_bridge() -> None:
                                 backend_port=int(os.getenv("BACKEND_PORT",
                                                            os.getenv("PORT", "5000"))))
     except Exception as e:
-        # The bridge is how every dashboard reaches us — a dead bridge with a
-        # live backend is a silently broken app, so fail loudly instead.
         app.logger.exception("VS-WS-001 WebSocket bridge failed to start")
         print(f"[app] VS-WS-001 WebSocket bridge failed: {e}", flush=True)
         raise SystemExit(1)
     _write_bridge_file(ws_port, token)
 
 def _write_bridge_file(ws_port: int, token: str) -> None:
-    """Advertise the live bridge to the --bridge CLI. Same trust model as
-    Riot's own lockfile: a user-readable file holding the per-launch secret.
-    Non-fatal on failure — a locked/synced .scout folder must not kill startup
-    (the CLI just keeps showing "waiting for backend")."""
     import tempfile
     import ws_server
     try:

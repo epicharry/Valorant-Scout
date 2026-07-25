@@ -20,6 +20,10 @@ dist/
 # Not shipped: running install.bat again repairs any issue diagnose.bat reported
 /diagnose.bat
 
+# Local-only personal offline launcher (never ship to any repo)
+/launch-offline.bat
+/_run_offline.py
+
 # Node / Next
 frontend/node_modules/
 frontend/.next/

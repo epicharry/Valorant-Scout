@@ -6,14 +6,14 @@
 
 **Live in-match intelligence for VALORANT — see every player's rank, peak, K/D, win-rate, smurf risk, full skin inventory and party before the round even starts.**
 
-Reads your **local VALORANT client** in real time and renders it as a slick web dashboard, a colour-coded terminal scoreboard, and your **Discord status** — plus an instalock helper, a cross-session encounter log, and a VALORANT chat **ASCII art studio**.
+Reads your **local VALORANT client** in real time and renders it as a slick web dashboard, a colour-coded terminal scoreboard, and your **Discord status** — plus **appear offline**, your **collection value**, **rank/RR history**, a **209-crosshair library**, an instalock helper, a cross-session encounter log, and a VALORANT chat **ASCII art studio**.
 
 ### 🌐 [**valorantscout.com**](https://valorantscout.com)
 Try the live dashboard right now — it runs in **demo mode** with VALORANT closed, no install needed.
 
 [Features](#-features) · [Quick start](#-quick-start) · [Screens](#-screens) · [CLI](#-terminal-cli) · [Discord](#-discord-rich-presence) · [Config](#-configuration) · [Credits](#-credits)
 
-`VALORANT` · `rank tracker` · `live scoreboard` · `smurf detector` · `instalock` · `incognito name reveal` · `discord rich presence` · `ascii chat art` · `Flask` · `Next.js` · `Rich CLI`
+`VALORANT` · `rank tracker` · `live scoreboard` · `smurf detector` · `appear offline` · `crosshair codes` · `skin collection value` · `rr history` · `instalock` · `incognito name reveal` · `discord rich presence` · `ascii chat art` · `Flask` · `Next.js` · `Rich CLI`
 
 </div>
 
@@ -42,6 +42,21 @@ your machine** and nothing is stored on a server. No account, no login, nothing 
 - **Account level** (recovered from match history even when the client hides it).
 - **Party detection** — colour-coded groups so you instantly see the 3-stack on the enemy team.
 - **Per-team averages** — avg rank, avg K/D, avg WR, smurf count, and a live **win-probability** bar.
+
+### 🫥 Appear offline
+Launch VALORANT and show up **offline** to your friends — no third-party binary, built from scratch.
+- Pick how you appear: **offline / away / mobile** (or back to **online**), from the app or the website.
+- Switch anytime without relaunching — change it in-app, or message the pinned **"Valorant Scout Active"** friend in-game (`offline`, `away`, `mobile`, `online`).
+- Status sticks between launches, and a live indicator confirms you're actually hidden.
+
+### 🎯 Crosshair library
+**209 pro & community crosshairs**, sorted by popularity, in a full-width browsable grid with big previews — one click copies the import code. Linked from the landing page and the dashboard.
+
+### 💰 Collection value
+Your owned skins valued by content tier, plus your wallet (VP / RP / KC). Works straight from the lobby — no match required — and your own collection also shows inside the profile modal.
+
+### 📈 Rank & RR history
+Durable RR/rank history that survives past a single session, a **trends** panel, and a **tilt detector** that flags rough runs.
 
 ### 🕵️ Smurf radar
 Heuristic flags that combine **account level vs. peak rank**, **K/D**, and **win-rate** to surface likely smurfs — with the reasons shown on hover.
@@ -196,7 +211,7 @@ VALORANT local client  ──►  Flask API (backend/)  ──►  Next.js dashb
                                     └─►  Discord Rich Presence (pypresence)
 ```
 
-- **`backend/`** — Flask service: live scoreboard pipeline, rank/stat resolution, party detection, encounter log, instalock worker, Discord presence. Art metadata is resolved from the public [valorant-api.com](https://valorant-api.com) CDN, so no binary assets are bundled.
+- **`backend/`** — Flask service: live scoreboard pipeline, rank/stat resolution, party detection, encounter log, instalock worker, Discord presence, appear-offline chat proxy (`offline_launch.py`), RR history (`history.py`) and collection valuation (`inventory.py`). Art metadata is resolved from the public [valorant-api.com](https://valorant-api.com) CDN, so no binary assets are bundled.
 - **`frontend/`** — Next.js (pages router) + Tailwind + Framer Motion.
 - **`cli.py`** — standalone terminal scoreboard.
 - **`run.py`** — one-command launcher for the whole stack.

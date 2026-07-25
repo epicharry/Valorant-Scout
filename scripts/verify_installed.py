@@ -1,10 +1,3 @@
-"""Verify that the active environment exactly matches requirements.txt.
-
-`pip check` verifies dependency relationships, not that installed versions equal
-an external lock file.  Scout uses this stdlib-only check during install,
-startup, update, diagnostics, and CI so compatible-but-different versions do
-not silently pass as the tested environment.
-"""
 from __future__ import annotations
 
 import argparse
@@ -73,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
         pins = read_lock(args.requirements)
         installed = installed_versions()
         problems = compare(pins, installed)
-    except Exception as exc:  # malformed/missing lock is a validation failure
+    except Exception as exc:
         print(f"EXACT DEPENDENCY CHECK FAILED: {exc}", file=sys.stderr)
         return 1
 
