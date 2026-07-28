@@ -13,7 +13,7 @@ Try the live dashboard right now — it runs in **demo mode** with VALORANT clos
 
 [Features](#-features) · [Quick start](#-quick-start) · [Screens](#-screens) · [CLI](#-terminal-cli) · [Discord](#-discord-rich-presence) · [Config](#-configuration) · [Credits](#-credits)
 
-`VALORANT` · `rank tracker` · `live scoreboard` · `smurf detector` · `appear offline` · `crosshair codes` · `skin collection value` · `rr history` · `instalock` · `incognito name reveal` · `discord rich presence` · `ascii chat art` · `Flask` · `Next.js` · `Rich CLI`
+[VALORANT Rank Checker](https://valorantscout.com/valorant-rank-checker) · [Live Scoreboard](https://valorantscout.com) · [VALORANT Smurf Detector](https://valorantscout.com/valorant-smurf-detector) · [Appear Offline in VALORANT](https://valorantscout.com/valorant-offline-mode) · [VALORANT Crosshair Codes](https://valorantscout.com/valorant-crosshairs) · [VALORANT Sensitivity](https://valorantscout.com/valorant-sensitivity) · [VALORANT ASCII Art](https://valorantscout.com/ascii)
 
 </div>
 
@@ -141,25 +141,18 @@ python run.py            # backend + terminal scoreboard, against the hosted das
 python run.py --no-cli   # backend only (no terminal window)
 python run.py --cli      # terminal scoreboard only
 ```
-By default the app opens the hosted dashboard; point it elsewhere with `FRONTEND_URL` in
-`backend/.env`. The full source (Flask backend **+** Next.js frontend) lives in the development repo
-if you want to run or modify the website locally. For that explicit developer mode, run
-`install.bat -Frontend` once, then use `python run.py --local-frontend` (or set
-`SCOUT_LOCAL_FRONTEND=true`). Merely having a `frontend/` folder never makes normal startup require
-Node.js, so a copied/private checkout still works on a clean PC through the hosted dashboard.
-
 ---
 
 ## 🖼️ Screens
 
 ### Live scoreboard
-![Live scoreboard](docs/screenshots/scoreboard.png)
+![VALORANT live scoreboard showing ranks, RR, K/D, win rate, and party detection](https://valorantscout.com/shots/scoreboard.png)
 
 ### Player profile
-![Player profile](docs/screenshots/profile.png)
+![VALORANT player profile with match history, stats, and skin inventory](https://valorantscout.com/shots/profile.png)
 
 ### ASCII chat-art studio — gallery & creator
-![ASCII gallery](docs/screenshots/ascii-gallery.png)
+![VALORANT ASCII chat-art studio gallery](https://valorantscout.com/shots/ascii-gallery.png)
 ![ASCII creator](docs/screenshots/ascii-creator.png)
 
 ### Terminal CLI
@@ -231,27 +224,6 @@ Valorant Scout stands on the shoulders of the community projects that mapped out
 Huge thanks to all of them. ❤️
 
 ---
-
-## 🔄 Updating
-
-`start.bat` **auto-updates on every launch**: it checks for a newer release and, if one exists,
-applies it before starting the app (offline or GitHub unreachable → it just launches your current
-version and retries next time). `UPDATE.bat` runs the same thing on demand. Either way the update
-is a **safe transaction**: the release zip is downloaded to a staging folder and extracted, the
-current version is backed up, the new one is activated and **boot-checked** (backend + WebSocket
-must come up healthy), and on any failure the previous version — code and dependencies — is
-restored automatically. Your settings (`backend/.env`), match data (`backend/data`) and logs
-(`.scout`) are never part of the transaction. (On a developer checkout — a `.git` folder present —
-auto-update is skipped; use `git pull`.)
-
-**Cutting a release (maintainers):** bump `VERSION` **and** `runtime.json` (checked by
-`scripts/verify-version.ps1`), commit, run `scripts/build-release.ps1 -Version <v> -Output dist`,
-verify with `scripts/verify-release.ps1 -Zip <zip>`, then extract that verified ZIP into an isolated
-public-repository worktree and commit that exact sanitized tree to public `main`. Never push the
-private development tree directly to the public remote: private source keeps its comments and the
-release builder strips Python, PowerShell and batch comments only in staging. Publish a GitHub
-Release whose tag matches with the single `valorant-scout-v<version>.zip` asset. The updater
-downloads that zip over HTTPS and refuses a release that doesn't contain it.
 
 ## 📜 License
 
