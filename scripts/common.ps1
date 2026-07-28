@@ -1,5 +1,5 @@
 ﻿$ErrorActionPreference = "Stop"
-$ProgressPreference = "SilentlyContinue"  # PS5.1 progress bar makes Invoke-WebRequest look frozen (and slows it)
+$ProgressPreference = "SilentlyContinue"
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
@@ -33,13 +33,13 @@ function Write-FileNoBom($path, $content) {
     [System.IO.File]::WriteAllText($path, $content, $enc)
 }
 
-# ---------------------------------------------------------------------------
-# Runtime manifest (runtime.json) — the single machine-readable contract for
-# what this release supports. Everything that checks a version reads it.
-# ---------------------------------------------------------------------------
+
+
+
+
 function Get-RuntimeManifest {
-    # [IO.File]::Exists + -LiteralPath: Test-Path/-Path treat [ ] in the folder
-    # name as wildcards and would report this file "missing" while it exists.
+
+
     $p = Join-Path $Root "runtime.json"
     if (-not [System.IO.File]::Exists($p)) { throw "runtime.json is missing — this checkout is incomplete. Re-download the release." }
     return (Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json)
@@ -51,8 +51,8 @@ function Get-LocalVersion {
     return "0.0.0"
 }
 
-# Semver-ish compare that understands prerelease tags ("1.1.2-rc.1").
-# Returns -1 / 0 / 1 for a<b / a=b / a>b. Release beats its own prerelease.
+
+
 function Compare-ScoutVersion([string]$a, [string]$b) {
     $a = ($a.Trim()) -replace '^[vV]', ''
     $b = ($b.Trim()) -replace '^[vV]', ''
@@ -70,7 +70,7 @@ function Compare-ScoutVersion([string]$a, [string]$b) {
     if ($pa.Count -gt 1) { $ra = $pa[1] }
     if ($pb.Count -gt 1) { $rb = $pb[1] }
     if (-not $ra -and -not $rb) { return 0 }
-    if (-not $ra) { return 1 }   # release > prerelease
+    if (-not $ra) { return 1 }
     if (-not $rb) { return -1 }
     if ($ra -eq $rb) { return 0 }
     $sa = $ra -split '\.'; $sb = $rb -split '\.'
@@ -99,9 +99,9 @@ function HashOf($rel) {
     return ""
 }
 
-# ---------------------------------------------------------------------------
-# Logging — same format, rotation and redaction rules as backend/scoutlog.py.
-# ---------------------------------------------------------------------------
+
+
+
 $Script:RedactionRules = @(
     @{ Pattern = '([?&](?:s|t|token|key)=)[^&\s"'']+';                                              Replace = '$1[REDACTED]' },
     @{ Pattern = '\b([st]=)[A-Za-z0-9._~-]{8,}';                                                    Replace = '$1[REDACTED]' },
@@ -140,10 +140,10 @@ function Write-ScoutLog {
         if ($Code) { $codePart = "$Code " }
         $line = "$ts [$Log] $Level $codePart$(Protect-ScoutText $Message)"
         [System.IO.File]::AppendAllText($file, $line + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
-    } catch { }  # logging must never take the installer down
+    } catch { }
 }
 
-# Hidden startup still needs a visible fatal error. Points at the exact log.
+
 function Show-FatalDialog([string]$message, [string]$logName) {
     $full = "$message`n`nDetails: $(Join-Path $ScoutDir "$logName.log")"
     try {
@@ -156,10 +156,10 @@ function Show-FatalDialog([string]$message, [string]$logName) {
     }
 }
 
-# ---------------------------------------------------------------------------
-# Exclusive locks — one installer / one updater at a time. The handle is held
-# open (FileShare None) until Close(); the OS releases it if we die.
-# ---------------------------------------------------------------------------
+
+
+
+
 function New-ScoutLock([string]$name) {
     if (-not (Test-Path $ScoutDir)) { New-Item -ItemType Directory -Path $ScoutDir | Out-Null }
     $path = Join-Path $ScoutDir "$name.lock"
@@ -171,9 +171,9 @@ function New-ScoutLock([string]$name) {
     }
 }
 
-# Cross-language named mutexes coordinate the Python launcher with PowerShell
-# maintenance. File locks and Python byte-range locks do not reliably block one
-# another on Windows, so install/update/start all use these names.
+
+
+
 function Get-ScoutMutexName([string]$purpose) {
     return "Local\ValorantScout-$purpose-$(Get-PathFingerprint)"
 }
@@ -201,10 +201,10 @@ function Close-ScoutMutex($mutex) {
     try { $mutex.Dispose() } catch { }
 }
 
-# install/update terminate a running app and continue instead of refusing.
-# The launcher records its own pid in runtime-state.json; we kill THAT process
-# tree only after confirming the pid is genuinely our launcher (a reused pid
-# must never be killed). Returns $true if it stopped a running app.
+
+
+
+
 function Stop-RunningApp([string]$LogName = "launcher") {
     $stateFile = Join-Path $ScoutDir "runtime-state.json"
     if (-not (Test-Path $stateFile)) { return $false }
@@ -213,15 +213,15 @@ function Stop-RunningApp([string]$LogName = "launcher") {
     if ($appPid -le 0) { return $false }
 
     if (-not (Get-CimInstance Win32_Process -Filter "ProcessId=$appPid" -ErrorAction SilentlyContinue)) {
-        Remove-Item $stateFile -Force -ErrorAction SilentlyContinue  # stale pid, app already gone
+        Remove-Item $stateFile -Force -ErrorAction SilentlyContinue
         return $false
     }
-    # Confirm the pid is genuinely OUR launcher before killing it. We match on
-    # this install's venv path ("<root>\.venv\") — specific enough that a reused
-    # pid whose ancestor merely lives under the root is NOT killed. On a
-    # Store-Python venv the recorded pid re-execs to the Store base interpreter,
-    # so that path only shows up on a parent; walk up a few hops (like run.py's
-    # _is_ours) to find it.
+
+
+
+
+
+
     $venvLower = $VenvDir.ToLowerInvariant()
     $cur = $appPid
     $ours = $false
@@ -237,23 +237,23 @@ function Stop-RunningApp([string]$LogName = "launcher") {
 
     Note "Closing the running Valorant Scout (PID $appPid) so we can continue ..."
     Write-ScoutLog -Log $LogName -Message "closing running app pid=$appPid before maintenance"
-    # EAP=Continue: taskkill writes to stderr when a tree child resists closing,
-    # and under the file-global Stop that stderr becomes a terminating error.
+
+
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        & taskkill /PID $appPid /T 2>&1 | Out-Null        # graceful (Ctrl-Break to the tree)
+        & taskkill /PID $appPid /T 2>&1 | Out-Null
         $deadline = (Get-Date).AddSeconds(3)
         while ((Get-Date) -lt $deadline -and (Get-CimInstance Win32_Process -Filter "ProcessId=$appPid" -ErrorAction SilentlyContinue)) {
             Start-Sleep -Milliseconds 200
         }
         if (Get-CimInstance Win32_Process -Filter "ProcessId=$appPid" -ErrorAction SilentlyContinue) {
-            & taskkill /PID $appPid /T /F 2>&1 | Out-Null  # force the whole tree
+            & taskkill /PID $appPid /T /F 2>&1 | Out-Null
         }
     } finally { $ErrorActionPreference = $prevEap }
 
-    # Wait for the process — and thus the App mutex it owned — to be fully gone
-    # before the caller acquires that mutex.
+
+
     $deadline = (Get-Date).AddSeconds(5)
     while ((Get-Date) -lt $deadline -and (Get-CimInstance Win32_Process -Filter "ProcessId=$appPid" -ErrorAction SilentlyContinue)) {
         Start-Sleep -Milliseconds 200
@@ -263,9 +263,9 @@ function Stop-RunningApp([string]$LogName = "launcher") {
     return $true
 }
 
-# ---------------------------------------------------------------------------
-# Preflight — fail fast with a human-readable reason instead of half-installing.
-# ---------------------------------------------------------------------------
+
+
+
 function Test-Preflight {
     $problems = @()
 
@@ -276,13 +276,13 @@ function Test-Preflight {
     if ($env:PROCESSOR_ARCHITEW6432) { $arch = $env:PROCESSOR_ARCHITEW6432 }
     if ($arch -ne "AMD64") { $problems += "Only x64 PCs are supported in this release (detected: $arch). ARM64 is not supported yet." }
 
-    # Running from inside an unextracted ZIP (Explorer preview) breaks everything.
+
     if ($Root -match '\.zip[\\/]' -or $Root -match '\\Temp1_[^\\]*\\') {
         $problems += "You are running from inside the ZIP file. Extract it first (right-click -> Extract All), then run install.bat from the extracted folder."
     }
 
-    # PowerShell -Path parameters treat [ ] as wildcards, which breaks file
-    # checks all over with misleading errors. Refuse up front with the real fix.
+
+
     if ($Root -match '[\[\]]') {
         $problems += "The folder name contains square brackets [ ]: '$Root'. Rename the folder to remove them (e.g. 'valorant-scout [1]' -> 'valorant-scout'), then run install.bat again."
     }
@@ -311,16 +311,16 @@ function Test-StdinInteractive {
     try { return -not [Console]::IsInputRedirected } catch { return $false }
 }
 
-# ---------------------------------------------------------------------------
-# Exact Python selection. Never trust the executable's name: run it and check
-# what it says it is. Only CPython <manifest version> 64-bit x64 is accepted.
-# ---------------------------------------------------------------------------
+
+
+
+
 function Get-PythonIdentity([string]$exe, [string[]]$exeArgs) {
     $probe = Join-Path $PSScriptRoot "python_probe.py"
     try {
-        # EAP=Continue: under the file-global Stop, redirected native stderr
-        # (a sitecustomize print, PYTHONWARNINGS) would throw and misclassify
-        # a healthy interpreter as broken.
+
+
+
         $prevEAP = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try { $out = & $exe @($exeArgs + @($probe)) 2>$null }
@@ -341,7 +341,7 @@ function Test-PythonExact($identity, $manifest) {
 function Get-PythonCandidates {
     $cands = @()
     $mf = Get-RuntimeManifest
-    $mm = ($mf.python.version -split '\.')[0..1] -join '.'   # "3.12"
+    $mm = ($mf.python.version -split '\.')[0..1] -join '.'
     if (Has-Cmd "py")      { $cands += @{ Exe = "py"; Args = @("-$mm") } }
     if (Has-Cmd "python")  { $cands += @{ Exe = "python";  Args = @() } }
     if (Has-Cmd "python3") { $cands += @{ Exe = "python3"; Args = @() } }
@@ -381,9 +381,9 @@ function Find-ExactPython {
     return $null
 }
 
-# Installs the exact python.org runtime, per-user. Pinned URL + SHA-256 +
-# Authenticode — winget is deliberately not used (its package family can't be
-# pinned to a patch version we've tested).
+
+
+
 function Install-ExactPython {
     $mf = Get-RuntimeManifest
     Step "Installing Python $($mf.python.version) (64-bit, from python.org) ..."
@@ -424,9 +424,9 @@ function Ensure-ExactPython {
     return $py
 }
 
-# ---------------------------------------------------------------------------
-# Venv validation & repair. "python.exe exists" is not a health check.
-# ---------------------------------------------------------------------------
+
+
+
 function Assert-IsRepoVenv([string]$path) {
     $resolved = [System.IO.Path]::GetFullPath($path)
     $expected = [System.IO.Path]::GetFullPath((Join-Path $Root ".venv"))
@@ -438,9 +438,9 @@ function Assert-IsRepoVenv([string]$path) {
 
 function Get-VenvPipVersion {
     try {
-        # -join: console-width wrapping can split the output into an array,
-        # and array -match filters instead of populating $Matches
-        # EAP=Continue: a pip deprecation line on stderr must not read as "no pip".
+
+
+
         $prevEAP = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try { $out = (& $VenvPy -m pip --version 2>$null) -join " " }
@@ -451,21 +451,21 @@ function Get-VenvPipVersion {
     return $null
 }
 
-# -Quick (startup path): file/marker checks only — NO python launches. The five
-# cold python starts below (identity probe, pip --version, pip check,
-# verify_installed, import_smoke) cost 15-25s on a cold machine (Windows
-# Sandbox, Defender scanning), which dwarfs the app's own boot. Install/update/
-# diagnose still run the full battery; a venv quick misses fails loudly at
-# backend start anyway.
+
+
+
+
+
+
 function Test-Venv([switch]$Quick) {
     $mf = Get-RuntimeManifest
     $reasons = @()
 
     if (-not (Test-Path $VenvPy)) { return @{ Ok = $false; Reasons = @("no python.exe in .venv") } }
 
-    # Python virtual environments are not portable. sys.prefix normally
-    # follows the executable after a folder move, so also inspect the creation
-    # command recorded in pyvenv.cfg and the install marker's path fingerprint.
+
+
+
     $cfgPath = Join-Path $VenvDir "pyvenv.cfg"
     if (-not (Test-Path $cfgPath)) {
         $reasons += "venv has no pyvenv.cfg (incomplete or corrupt environment)"
@@ -545,9 +545,9 @@ function Test-Venv([switch]$Quick) {
         $reasons += "requirements.txt changed since packages were installed (hash mismatch)"
     }
 
-    # Under the file-global EAP=Stop, PS5.1 turns redirected native stderr into a
-    # terminating NativeCommandError, so these probes would THROW instead of
-    # contributing reasons. Let stderr flow; only the exit codes matter.
+
+
+
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
@@ -605,16 +605,16 @@ function Install-PyDeps {
     Ok "Python packages installed and verified."
 }
 
-# ---------------------------------------------------------------------------
-# Install markers — written ONLY after every required step passed.
-# ---------------------------------------------------------------------------
+
+
+
 function Get-PathFingerprint {
-    # MUST stay byte-identical to _path_fingerprint in run.py: normalize the path,
-    # then lowercase ASCII A-Z ONLY (every other char untouched). ToLowerInvariant
-    # is culture-aware and maps chars like Turkish İ (U+0130) / ẞ (U+1E9E) that
-    # Python's str.lower would map differently — an ASCII-only fold keeps both
-    # sides in lockstep. Pure-ASCII paths hash identically to the old algorithm,
-    # so existing installed.json markers stay valid.
+
+
+
+
+
+
     $normalized = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
     $chars = $normalized.ToCharArray()
     for ($i = 0; $i -lt $chars.Length; $i++) {
@@ -667,13 +667,13 @@ function Is-Installed {
     return ((Test-Markers).Ok -and (Test-Path $VenvPy))
 }
 
-# ---------------------------------------------------------------------------
-# Region + shortcut (unchanged behaviour)
-# ---------------------------------------------------------------------------
+
+
+
 function Set-Region($region) {
     $lines = @()
     if (Test-Path $EnvFile) {
-        # -Encoding UTF8: PS5.1 defaults BOM-less files to ANSI and mojibakes any non-ASCII on the rewrite
+
         $lines = Get-Content $EnvFile -Encoding UTF8 | Where-Object { $_ -notmatch '^\s*RIOT_REGION\s*=' }
     }
     $lines += "RIOT_REGION=$region"
@@ -705,9 +705,9 @@ function New-DesktopShortcut {
     } catch { Warn2 "Couldn't create the desktop shortcut ($($_.Exception.Message))." }
 }
 
-# ---------------------------------------------------------------------------
-# Frontend (private/dev tree only — public slim builds never touch Node)
-# ---------------------------------------------------------------------------
+
+
+
 function Find-Node {
     if (Has-Cmd "node") {
         try {
@@ -740,9 +740,9 @@ function Build-Frontend {
     Ok "Website built."
 }
 
-# ---------------------------------------------------------------------------
-# Update CHECK only (never applies). UPDATE.bat runs the transactional updater.
-# ---------------------------------------------------------------------------
+
+
+
 function Get-LatestRelease([int]$timeoutSec = 8) {
     try {
         return Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `

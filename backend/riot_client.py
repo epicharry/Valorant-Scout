@@ -281,6 +281,49 @@ class LocalAuth:
             f"https://127.0.0.1:{self.lockfile['port']}{endpoint}",
             headers=local, verify=False, timeout=5).json()
 
+
+def _offline_presence_private() -> dict | None:
+    try:
+        import offline_launch
+        return offline_launch.captured_presence_private()
+    except Exception:
+        return None
+
+
+def chat_presences(auth: LocalAuth) -> list[dict]:
+    data = auth.local_get("/chat/v4/presences")
+    presences = [dict(p) for p in ((data or {}).get("presences", []) or [])
+                 if isinstance(p, dict)]
+    private = _offline_presence_private()
+    if not private:
+        return presences
+
+    encoded = base64.b64encode(
+        json.dumps(private, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    replaced = False
+    replaced_at = None
+    for index, presence in enumerate(presences):
+        if presence.get("puuid") != auth.puuid:
+            continue
+        if presence.get("product") not in (None, "valorant"):
+            continue
+        presence["product"] = "valorant"
+        presence["private"] = encoded
+        replaced = True
+        replaced_at = index
+        break
+    if replaced_at not in (None, 0):
+        presences.insert(0, presences.pop(replaced_at))
+    if not replaced:
+        presences.insert(0, {
+            "puuid": auth.puuid,
+            "product": "valorant",
+            "private": encoded,
+        })
+    return presences
+
+
 def _iso_to_epoch(s: str | None) -> float | None:
     pass
     try:
@@ -296,10 +339,10 @@ _QUEUE_STARTED: float | None = None
 def _self_presence_private(auth: LocalAuth) -> dict | None:
     pass
     try:
-        data = auth.local_get("/chat/v4/presences")
+        presences = chat_presences(auth)
     except Exception:
         return None
-    for pr in (data or {}).get("presences", []) or []:
+    for pr in presences:
         if pr.get("puuid") != auth.puuid or not pr.get("private"):
             continue
         if pr.get("product") not in (None, "valorant"):

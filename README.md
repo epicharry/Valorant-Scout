@@ -48,6 +48,7 @@ Launch VALORANT and show up **offline** to your friends — no third-party binar
 - Pick how you appear: **offline / away / mobile** (or back to **online**), from the app or the website.
 - Switch anytime without relaunching — change it in-app, or message the pinned **"Valorant Scout Active"** friend in-game (`offline`, `away`, `mobile`, `online`).
 - Status sticks between launches, and a live indicator confirms you're actually hidden.
+- Close and reopen Scout without breaking the offline session, friends list or matchmaking controls — the windowless relay stays active until Riot and VALORANT close.
 
 ### 🎯 Crosshair library
 **209 pro & community crosshairs**, sorted by popularity, in a full-width browsable grid with big previews — one click copies the import code. Linked from the landing page and the dashboard.
@@ -245,9 +246,12 @@ auto-update is skipped; use `git pull`.)
 
 **Cutting a release (maintainers):** bump `VERSION` **and** `runtime.json` (checked by
 `scripts/verify-version.ps1`), commit, run `scripts/build-release.ps1 -Version <v> -Output dist`,
-verify with `scripts/verify-release.ps1 -Zip <zip>`, then publish a GitHub Release whose tag matches
-with the single `valorant-scout-v<version>.zip` asset. The updater downloads that zip
-over HTTPS and refuses a release that doesn't contain it.
+verify with `scripts/verify-release.ps1 -Zip <zip>`, then extract that verified ZIP into an isolated
+public-repository worktree and commit that exact sanitized tree to public `main`. Never push the
+private development tree directly to the public remote: private source keeps its comments and the
+release builder strips Python, PowerShell and batch comments only in staging. Publish a GitHub
+Release whose tag matches with the single `valorant-scout-v<version>.zip` asset. The updater
+downloads that zip over HTTPS and refuses a release that doesn't contain it.
 
 ## 📜 License
 

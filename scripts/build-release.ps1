@@ -1,19 +1,19 @@
 ﻿param(
     [Parameter(Mandatory = $true)][string]$Version,
-    [Parameter(Mandatory = $true)][string]$Output,  # folder to write the three assets into
-    [switch]$AllowDirty                             # local testing only; publishing must stay clean
+    [Parameter(Mandatory = $true)][string]$Output,
+    [switch]$AllowDirty
 )
 
-# Builds the public slim release artifact from an explicit ALLOWLIST of
-# tracked files. Produces a single asset the updater consumes:
-#   valorant-scout-v<version>.zip   (files at the zip root, no inner folder)
-# Then verifies its own output by extracting elsewhere and checking it.
+
+
+
+
 
 . (Join-Path $PSScriptRoot "common.ps1")
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-# ---- the public payload allowlist ------------------------------------------
+
 $AllowExact = @(
     ".gitattributes", ".gitignore", "LICENSE", "README.md", "VERSION",
     "runtime.json", "install.bat", "start.bat", "UPDATE.bat",
@@ -21,7 +21,7 @@ $AllowExact = @(
 )
 $AllowPrefix = @("assets/", "backend/", "docs/", "scripts/")
 
-# Never allowed in the artifact regardless of the allowlist above.
+
 $ForbiddenPatterns = @(
     '(^|/)\.env$', '\.env\.local', '(^|/)frontend/', '(^|/)node_modules/',
     '(^|/)__pycache__/', '\.pyc$', '(^|/)\.venv/', '(^|/)\.scout/',
@@ -29,14 +29,14 @@ $ForbiddenPatterns = @(
     '(^|/)vendor/', '(^|/)tests/', '(^|/)\.github/', '(^|/)\.claude/'
 )
 
-# Text patterns that mean a secret or a developer-machine path leaked in.
+
 $SecretScans = @(
     @{ Name = "private key";            Pattern = 'BEGIN (RSA|EC|OPENSSH) PRIVATE KEY' },
     @{ Name = "Ably root key";          Pattern = '\b[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{6,}:[A-Za-z0-9_\-]{16,}\b' },
     @{ Name = "Supabase service key";   Pattern = 'eyJ[A-Za-z0-9_\-]{30,}\.[A-Za-z0-9_\-]{30,}' },
     @{ Name = "developer absolute path"; Pattern = '[A-Za-z]:\\Users\\(?!Public)[A-Za-z0-9._ -]+\\' },
-    # built from parts so this scanner (which ships in the artifact) never
-    # contains the canary string itself
+
+
     @{ Name = "canary marker";          Pattern = ('VS-CANARY' + '-SECRET') }
 )
 
@@ -55,8 +55,8 @@ if ($dirty -and -not $AllowDirty) {
 if ($dirty) { Warn2 "working tree is DIRTY - this development artifact must not be published." }
 
 Step "Selecting tracked files via the allowlist ..."
-# --others --exclude-standard: also pick up allowlisted files that exist but
-# aren't committed yet (pre-commit RC builds); .gitignore'd junk stays out.
+
+
 $tracked = & git -C $Root ls-files --cached --others --exclude-standard
 $payload = @()
 foreach ($f in $tracked) {
@@ -72,7 +72,7 @@ foreach ($f in $tracked) {
 if ($payload.Count -lt 30) { Fail-Build "suspiciously small payload ($($payload.Count) files) - allowlist broken?" }
 Ok "$($payload.Count) files selected."
 
-# ---- stage ------------------------------------------------------------------
+
 $rootFolder = "valorant-scout-v$Version"
 $work = Join-Path $env:TEMP ("vs-build-" + [Guid]::NewGuid().ToString("N"))
 $stage = Join-Path $work $rootFolder
@@ -87,27 +87,30 @@ try {
         Copy-Item -Force $src $dst
     }
 
-    # ---- strip comments (staging only) --------------------------------------
-    # Comments and docstrings are working notes; the public artifact ships
-    # without them. This edits the STAGE, never the working tree. Runs before
-    # the secret scan so any developer path living in a comment is already gone
-    # by the time the scan looks.
-    Step "Stripping comments + docstrings from the staged Python ..."
-    # EAP=Continue: under the file-global Stop, PS5.1 turns a native command's
-    # stderr into a terminating error, pre-empting these exit-code checks.
+
+
+
+
+
+    Step "Stripping comments + docstrings from staged code ..."
+
+
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
         & $VenvPy (Join-Path $PSScriptRoot "strip_comments.py") $stage
         if ($LASTEXITCODE -ne 0) { Fail-Build "comment stripping failed - refusing to build." }
-        # A stripped tree that will not byte-compile must never reach the zip.
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+            (Join-Path $PSScriptRoot "strip_script_comments.ps1") -Root $stage
+        if ($LASTEXITCODE -ne 0) { Fail-Build "script comment stripping failed - refusing to build." }
+
         & $VenvPy -m compileall -q $stage 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) { Fail-Build "staged Python does not byte-compile after stripping." }
     } finally { $ErrorActionPreference = $prevEap }
-    # compileall leaves __pycache__ behind, which the staging scan forbids.
+
     Get-ChildItem -Path $stage -Recurse -Directory -Filter "__pycache__" |
         Remove-Item -Recurse -Force
-    Ok "Comments stripped and the staged tree byte-compiles."
+    Ok "Python, PowerShell and batch comments stripped; staged Python byte-compiles."
 
     Step "Scanning the staged tree for secrets, caches and developer paths ..."
     $textExt = @(".py", ".ps1", ".bat", ".md", ".txt", ".json", ".example", ".gitignore", ".gitattributes")
@@ -140,13 +143,13 @@ try {
     }
     Ok "Encodings OK."
 
-    # ---- zip ----------------------------------------------------------------
-    # The release is a single source zip — no separate manifest or checksum
-    # assets. GitHub serves it over HTTPS and the updater boot-checks + rolls
-    # back, so a self-referential checksum added no real protection.
-    # includeBaseDirectory = $false: the files live at the ZIP ROOT (no inner
-    # folder). Windows "Extract All" then puts everything straight into one
-    # folder named after the zip, instead of nesting a second folder inside.
+
+
+
+
+
+
+
     New-Item -ItemType Directory -Force -Path $Output | Out-Null
     $zipName = "valorant-scout-v$Version.zip"
     $zipPath = Join-Path $Output $zipName
@@ -155,7 +158,7 @@ try {
     [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $zipPath,
         [System.IO.Compression.CompressionLevel]::Optimal, $false)
 
-    # ---- self-verify: extract elsewhere and sanity-check --------------------
+
     Step "Verifying the built artifact (extract + check) ..."
     $verifyDir = Join-Path $work "verify"
     [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $verifyDir)

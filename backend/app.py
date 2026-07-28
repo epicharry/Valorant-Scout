@@ -301,9 +301,9 @@ def live():
 @app.get("/api/encounters")
 def encounters():
     pass
-    if _live_enabled():
-        return jsonify({"players": encounter_log.get_all()})
-    return jsonify({"players": sample_match.encounters()})
+    if client.source_pref == "demo":
+        return jsonify({"players": sample_match.encounters()})
+    return jsonify({"players": encounter_log.get_all()})
 
 @app.get("/api/recap")
 def recap():
@@ -314,6 +314,12 @@ def recap():
     except (TypeError, ValueError):
         seed = 7
     return jsonify(live_recap or sample_match.recap(seed))
+
+
+@app.post("/api/session/reset")
+def session_reset():
+    return jsonify(session_tracker.reset())
+
 
 def _insights_payload() -> dict:
     if _live_enabled():
@@ -329,12 +335,26 @@ def insights():
 
 def _inventory_payload() -> dict:
     if not _live_enabled():
-        return {"available": False, "error": "Live client not available."}
+        return {
+            "available": False,
+            "retryable": client.source_pref != "demo",
+            "error": "Live client not available.",
+        }
     try:
         return inventory.snapshot(LocalAuth())
+    except ClientNotReady:
+        cached = inventory.last_good()
+        if cached:
+            return cached
+        return {"available": False, "retryable": True,
+                "error": "Your collection is still loading from Riot."}
     except Exception:
         app.logger.exception("inventory snapshot failed")
+        cached = inventory.last_good()
+        if cached:
+            return cached
         return {"available": False,
+                "retryable": True,
                 "error": "Couldn't read your collection from the Riot client."}
 
 @app.get("/api/inventory")
@@ -600,9 +620,7 @@ def handle_data_request(req_type: str, params: dict | None) -> dict:
             return live_recap or sample_match.recap(int(params.get("seed") or 7))
 
         if req_type == "encounters":
-            if _live_enabled():
-                return {"players": encounter_log.get_all()}
-            return {"players": sample_match.encounters(int(params.get("seed") or 7))}
+            return {"players": encounter_log.get_all()}
 
         if req_type == "insights":
             return _insights_payload()

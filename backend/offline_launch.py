@@ -11,7 +11,9 @@ import sys
 import threading
 import time
 import re
+import secrets
 import urllib.parse
+import urllib.request
 import uuid
 
 import requests
@@ -88,6 +90,17 @@ _STATUS_PATH = os.path.join(
     os.getenv("LOCALAPPDATA", os.path.expanduser("~")),
     "ValorantScout", "offline", "status",
 )
+
+_HELPER_PROTOCOL = 1
+_HELPER_MODE = os.getenv("VALORANT_SCOUT_OFFLINE_HELPER") == "1"
+_HELPER_STATE_PATH = os.getenv(
+    "SCOUT_OFFLINE_HELPER_STATE",
+    os.path.join(
+        os.getenv("LOCALAPPDATA", os.path.expanduser("~")),
+        "ValorantScout", "offline", "helper.json",
+    ),
+)
+_HELPER_START_LOCK = threading.Lock()
 
 
 def _load_status() -> str:
@@ -263,6 +276,18 @@ def _extract_valorant_version(text: str) -> str | None:
         return None
 
 
+def _extract_valorant_private(text: str) -> dict | None:
+    m = re.search(r"<valorant\b[^>]*>.*?<p>([A-Za-z0-9+/=]+)</p>.*?</valorant>",
+                  text or "", re.DOTALL)
+    if not m:
+        return None
+    try:
+        data = json.loads(base64.b64decode(m.group(1)))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
 def _fake_presence(version: str | None = None,
                    status: str = _DEFAULT_STATUS) -> bytes:
     ts = int(time.time() * 1000)
@@ -355,6 +380,26 @@ def kill_riot() -> None:
             pass
 
 
+def _hidden_riot_process_kwargs() -> dict:
+    kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if not sys.platform.startswith("win"):
+        return kwargs
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if flags:
+        kwargs["creationflags"] = flags
+    startup_cls = getattr(subprocess, "STARTUPINFO", None)
+    if startup_cls is not None:
+        startup = startup_cls()
+        startup.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+        startup.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        kwargs["startupinfo"] = startup
+    return kwargs
+
+
 def _fetch_cert() -> bool:
     try:
         r = _http().get(CERT_URL, timeout=15)
@@ -433,9 +478,15 @@ class _Conn:
         self.inserted = False
         self.presence_sent = False
         self.last_presence: str | None = None
+        self.last_private: dict | None = None
+        self.captured_at = 0.0
 
     def capture(self, raw: str) -> None:
         self.last_presence = raw
+        private = _extract_valorant_private(raw)
+        if private:
+            self.last_private = private
+            self.captured_at = time.time()
 
 
 class _Engine:
@@ -504,6 +555,8 @@ class _Engine:
         except Exception:
             c_writer.close()
             return
+        if not self._conns:
+            self.friends_loaded = False
         self.connected = True
         conn = _Conn(c_writer, u_writer)
         self._conns.append(conn)
@@ -737,7 +790,294 @@ class _Engine:
 _engine = _Engine()
 
 
-def launch(status_: str | None = None) -> dict:
+def _read_helper_info() -> dict | None:
+    try:
+        with open(_HELPER_STATE_PATH, encoding="utf-8") as f:
+            info = json.load(f)
+        if (not isinstance(info, dict)
+                or info.get("protocol") != _HELPER_PROTOCOL
+                or not isinstance(info.get("port"), int)
+                or not info.get("token")):
+            return None
+        return info
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _remove_helper_info(expected_token: str | None = None) -> None:
+    try:
+        if expected_token:
+            current = _read_helper_info()
+            if current and current.get("token") != expected_token:
+                return
+        os.remove(_HELPER_STATE_PATH)
+    except OSError:
+        pass
+
+
+def _write_helper_info(port: int, token: str) -> None:
+    folder = os.path.dirname(_HELPER_STATE_PATH)
+    os.makedirs(folder, exist_ok=True)
+    payload = {
+        "protocol": _HELPER_PROTOCOL,
+        "pid": os.getpid(),
+        "port": int(port),
+        "token": token,
+    }
+    tmp = os.path.join(folder, f".helper-{os.getpid()}-{uuid.uuid4().hex}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        os.replace(tmp, _HELPER_STATE_PATH)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _helper_request(command: str, payload: dict | None = None,
+                    timeout: float = 3.0) -> dict | None:
+    info = _read_helper_info()
+    if not info:
+        return None
+    body = json.dumps({
+        "token": info["token"],
+        "command": command,
+        "payload": payload or {},
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{info['port']}/control",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        return result if isinstance(result, dict) else None
+    except Exception:
+        return None
+
+
+def _hidden_helper_process_kwargs(*, detached: bool = False) -> dict:
+    kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if not sys.platform.startswith("win"):
+        if detached:
+            kwargs["start_new_session"] = True
+        return kwargs
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if flags:
+        kwargs["creationflags"] = flags
+    return kwargs
+
+
+def _helper_python_executable() -> str:
+    if not sys.platform.startswith("win"):
+        return sys.executable
+    candidate = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    return candidate if os.path.isfile(candidate) else sys.executable
+
+
+def _spawn_helper_broker() -> None:
+    subprocess.Popen(
+        [_helper_python_executable(), os.path.abspath(__file__),
+         "--offline-helper-broker"],
+        cwd=os.path.dirname(os.path.abspath(__file__)),
+        **_hidden_helper_process_kwargs(),
+    )
+
+
+def _broker_main() -> int:
+    env = os.environ.copy()
+    env["VALORANT_SCOUT_OFFLINE_HELPER"] = "1"
+    try:
+        subprocess.Popen(
+            [_helper_python_executable(), os.path.abspath(__file__),
+             "--offline-helper"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            env=env,
+            **_hidden_helper_process_kwargs(detached=True),
+        )
+        return 0
+    except Exception as e:
+        _dbg(f"helper broker failed: {e}", echo=True)
+        return 1
+
+
+def _windows_process_names() -> set[str]:
+    import ctypes
+    from ctypes import wintypes
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    snapshot_fn = kernel32.CreateToolhelp32Snapshot
+    snapshot_fn.argtypes = (wintypes.DWORD, wintypes.DWORD)
+    snapshot_fn.restype = wintypes.HANDLE
+    first_fn = kernel32.Process32FirstW
+    first_fn.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+    first_fn.restype = wintypes.BOOL
+    next_fn = kernel32.Process32NextW
+    next_fn.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+    next_fn.restype = wintypes.BOOL
+    close_fn = kernel32.CloseHandle
+    close_fn.argtypes = (wintypes.HANDLE,)
+    close_fn.restype = wintypes.BOOL
+
+    snapshot = snapshot_fn(0x00000002, 0)
+    invalid = ctypes.c_void_p(-1).value
+    if snapshot in (None, invalid):
+        raise OSError(ctypes.get_last_error(), "CreateToolhelp32Snapshot failed")
+    names = set()
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        if first_fn(snapshot, ctypes.byref(entry)):
+            while True:
+                names.add(str(entry.szExeFile).lower())
+                if not next_fn(snapshot, ctypes.byref(entry)):
+                    break
+    finally:
+        close_fn(snapshot)
+    return names
+
+
+def _riot_process_running() -> bool:
+    if not sys.platform.startswith("win"):
+        return bool(_engine._conns)
+    try:
+        names = _windows_process_names()
+        return any(name.lower() in names for name in _RIOT_PROCS)
+    except Exception:
+        return True
+
+
+def _helper_monitor(server) -> None:
+    launched_at = time.monotonic()
+    saw_riot = False
+    gone_since = None
+    while True:
+        time.sleep(10)
+        running = _riot_process_running()
+        if running:
+            saw_riot = True
+            gone_since = None
+            continue
+        if not saw_riot or time.monotonic() - launched_at < 90:
+            continue
+        if gone_since is None:
+            gone_since = time.monotonic()
+            continue
+        if time.monotonic() - gone_since >= 45:
+            _dbg("helper: Riot/VALORANT closed; shutting down detached relay")
+            server.shutdown()
+            return
+
+
+def _helper_main() -> int:
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    token = secrets.token_urlsafe(32)
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *_):
+            pass
+
+        def do_POST(self):
+            if self.path != "/control":
+                self.send_error(404)
+                return
+            try:
+                length = min(int(self.headers.get("Content-Length") or 0), 1024 * 1024)
+                request = json.loads(self.rfile.read(length).decode("utf-8"))
+                if not secrets.compare_digest(str(request.get("token") or ""), token):
+                    self.send_error(403)
+                    return
+                command = request.get("command")
+                payload = request.get("payload") or {}
+                if command == "status":
+                    result = _status_local()
+                elif command == "launch":
+                    result = _launch_local(payload.get("status"))
+                elif command == "set_status":
+                    result = _set_status_local(str(payload.get("status") or ""))
+                elif command == "set_enabled":
+                    result = _set_enabled_local(bool(payload.get("enabled", True)))
+                elif command == "presence":
+                    result = {"private": _captured_presence_private_local()}
+                elif command == "shutdown":
+                    result = {"ok": True}
+                    threading.Thread(target=server.shutdown,
+                                     name="offline-helper-stop", daemon=True).start()
+                else:
+                    result = {"ok": False, "message": "Unknown helper command."}
+                body = json.dumps(result).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                body = json.dumps({"ok": False, "message": str(e)}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    _write_helper_info(server.server_address[1], token)
+    _dbg(f"helper: ready pid={os.getpid()} port={server.server_address[1]}")
+    threading.Thread(target=_helper_monitor, args=(server,),
+                     name="offline-helper-monitor", daemon=True).start()
+    try:
+        server.serve_forever(poll_interval=0.5)
+    finally:
+        server.server_close()
+        _remove_helper_info(token)
+    return 0
+
+
+def _ensure_helper() -> bool:
+    if _helper_request("status") is not None:
+        return True
+    with _HELPER_START_LOCK:
+        if _helper_request("status") is not None:
+            return True
+        try:
+            _spawn_helper_broker()
+        except Exception as e:
+            _dbg(f"helper spawn failed: {e}", echo=True)
+            return False
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline:
+            time.sleep(0.1)
+            if _helper_request("status", timeout=1.0) is not None:
+                return True
+    return False
+
+
+def _launch_local(status_: str | None = None) -> dict:
     _dbg(f"launch: requested (status={status_!r})", echo=True)
     if not sys.platform.startswith("win"):
         return {"ok": False, "message": "Offline mode is Windows-only."}
@@ -769,7 +1109,7 @@ def launch(status_: str | None = None) -> dict:
         "--launch-patchline=live",
     ]
     try:
-        subprocess.Popen(args, creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+        subprocess.Popen(args, **_hidden_riot_process_kwargs())
         _dbg("launch: Popen'd Riot Client with " + " ".join(args[1:]))
     except Exception as e:
         return {"ok": False, "message": f"Couldn't start the Riot Client: {e}"}
@@ -779,28 +1119,90 @@ def launch(status_: str | None = None) -> dict:
                        f"Your friends will see you as {_engine.status}."}
 
 
-def set_enabled(enabled: bool) -> dict:
+def launch(status_: str | None = None) -> dict:
+    if _HELPER_MODE:
+        return _launch_local(status_)
+    if not _ensure_helper():
+        return {"ok": False,
+                "message": "Couldn't start the offline-mode relay helper."}
+    return (_helper_request("launch", {"status": status_}, timeout=60.0)
+            or {"ok": False, "message": "Offline-mode relay stopped unexpectedly."})
+
+
+def _set_enabled_local(enabled: bool) -> dict:
     if not _engine.started:
         return {"ok": False, "message": "Offline mode isn't running."}
     return _engine.set_enabled(enabled)
 
 
-def set_status(status_: str) -> dict:
+def set_enabled(enabled: bool) -> dict:
+    if not _HELPER_MODE:
+        remote = _helper_request("set_enabled", {"enabled": enabled})
+        if remote is not None:
+            return remote
+    return _set_enabled_local(enabled)
+
+
+def _set_status_local(status_: str) -> dict:
     if not _engine.started:
         return {"ok": False, "message": "Offline mode isn't running."}
     return _engine.set_status(status_)
 
 
-def status() -> dict:
+def set_status(status_: str) -> dict:
+    if not _HELPER_MODE:
+        remote = _helper_request("set_status", {"status": status_})
+        if remote is not None:
+            return remote
+    return _set_status_local(status_)
+
+
+def _status_local() -> dict:
     live = bool(_engine._conns)
+    active = bool(_engine.connected and live)
     return {"running": _engine.started,
+            "active": active,
             "status": _engine.status,
             "enabled": _engine.status != "online",
-            "connected": _engine.connected and live,
+            "connected": active,
             "friendsLoaded": _engine.friends_loaded and live,
             "configPort": _engine.config_port,
             "chatPort": _engine.chat_port}
 
+
+def status() -> dict:
+    if not _HELPER_MODE:
+        remote = _helper_request("status")
+        if remote is not None:
+            return remote
+    return _status_local()
+
+
+def _captured_presence_private_local() -> dict | None:
+    if not (_engine.connected and _engine._conns):
+        return None
+    conns = list(_engine._conns)
+    candidates = [c for c in conns if c.last_private]
+    if not candidates:
+        return None
+    newest = max(candidates, key=lambda c: c.captured_at)
+    return dict(newest.last_private)
+
+
+def captured_presence_private() -> dict | None:
+    if not _HELPER_MODE:
+        remote = _helper_request("presence")
+        if remote is not None:
+            private = remote.get("private")
+            return private if isinstance(private, dict) else None
+    return _captured_presence_private_local()
+
+
+if __name__ == "__main__" and "--offline-helper-broker" in sys.argv:
+    raise SystemExit(_broker_main())
+
+if __name__ == "__main__" and "--offline-helper" in sys.argv:
+    raise SystemExit(_helper_main())
 
 if __name__ == "__main__":
     p = ('<presence from="x"><show>chat</show><status>hi</status>'
@@ -850,6 +1252,8 @@ if __name__ == "__main__":
     pv = (f'<presence from="me"><games><valorant><st>x</st>'
           f'<p>{ver_blob}</p></valorant></games></presence>')
     assert _extract_valorant_version(pv) == "release-10.11-shipping-9-9"
+    assert _extract_valorant_private(pv)["partyPresenceData"]["partyClientVersion"] \
+        == "release-10.11-shipping-9-9"
     _fp = _fake_presence("release-10.11-shipping-9-9").decode()
     assert _extract_valorant_version(_fp) == "release-10.11-shipping-9-9"
     assert _extract_valorant_version("<presence><show>chat</show></presence>") is None

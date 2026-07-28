@@ -1,16 +1,16 @@
 ﻿param(
-    [switch]$DevOverride,          # required to update over a .git developer checkout
-    [string]$LocalAssets = "",     # test hook: folder holding the three release assets (skips download)
-    [string]$ExpectVersion = "",   # test hook: version expected inside -LocalAssets
-    [switch]$AllowDirtyAssets      # test hook only; never accepted for downloaded releases
+    [switch]$DevOverride,
+    [string]$LocalAssets = "",
+    [string]$ExpectVersion = "",
+    [switch]$AllowDirtyAssets
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
 
-# Staged, verified, transactional update:
-#   download -> verify (checksums, manifest, safe archive) -> backup -> apply
-#   -> validate (deps, backend+WS boot) -> commit, with rollback on any failure
-# and crash recovery from the .scout/update-state.json journal.
+
+
+
+
 
 $StateFile = Join-Path $ScoutDir "update-state.json"
 
@@ -18,15 +18,15 @@ function Write-UpdateState($state) {
     $temp = "$StateFile.tmp"
     Write-FileNoBom $temp ($state | ConvertTo-Json)
     if (Test-Path $StateFile) {
-        # [NullString]::Value, not $null: PS 5.1 coerces $null to "" for the
-        # string backup-path parameter, and "" throws "path is not of a legal form".
+
+
         [System.IO.File]::Replace($temp, $StateFile, [NullString]::Value)
     } else {
         [System.IO.File]::Move($temp, $StateFile)
     }
 }
 
-# User data is NEVER part of an update transaction.
+
 $PreservePrefixes = @("backend\.env", "backend\data", ".scout", ".venv", ".git",
                       "frontend\.env.local", "frontend\node_modules", "frontend\.next")
 
@@ -59,8 +59,8 @@ function Get-FreePort {
 }
 
 function Remove-LegacyCaches {
-    # Pre-manifest releases accidentally included Python bytecode. It is never
-    # user data and can load stale code after an otherwise successful update.
+
+
     $targets = @()
     $top = Join-Path $Root "__pycache__"
     if (Test-Path $top) { $targets += Get-Item $top }
@@ -72,8 +72,8 @@ function Remove-LegacyCaches {
     foreach ($target in @($targets | Sort-Object FullName -Unique)) {
         Remove-Item -LiteralPath $target.FullName -Recurse -Force -ErrorAction SilentlyContinue
     }
-    # Releases no longer ship a manifest or the checksum verifier; drop the
-    # copies an older install left behind so the tree matches what we ship.
+
+
     foreach ($stale in @("release-manifest.json", "scripts\update_verify.py")) {
         $p = Join-Path $Root $stale
         if (Test-Path $p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
@@ -103,8 +103,8 @@ function Restore-FromBackup($state) {
         if (Test-Path $resolved) { Remove-Item -Recurse -Force $resolved }
         Move-Item -LiteralPath $state.venvBackupDir -Destination $resolved
     }
-    # The failure may have happened after the new install markers were written.
-    # Re-derive them from the restored code/dependencies so rollback is complete.
+
+
     Save-Markers (Get-SavedRegion)
     if ($backup -and (Test-Path $backup)) { Remove-Item -Recurse -Force $backup -ErrorAction SilentlyContinue }
     Remove-Item -Force $StateFile -ErrorAction SilentlyContinue
@@ -125,8 +125,8 @@ try {
     Stop-RunningApp "update" | Out-Null
     $appMutex = New-ScoutMutex "App" "Valorant Scout is still running and couldn't be closed automatically. Close the scoreboard window before updating."
 
-    # Recover before checking the venv: an interrupted dependency transaction
-    # may intentionally have moved .venv into its rollback location.
+
+
     if (Test-Path $StateFile) {
         try { $prev = Get-Content $StateFile -Raw | ConvertFrom-Json } catch { $prev = $null }
         if ($prev -and $prev.phase -in @("apply", "validate")) {
@@ -156,7 +156,7 @@ try {
         throw "This is a developer checkout (.git present). The updater refuses to overwrite it — use git pull, or re-run with -DevOverride if you really mean it."
     }
 
-    # ---- Locate the release zip ----------------------------------------
+
     $zipName = ""; $zip = ""; $newVersion = ""
     if ($LocalAssets) {
         if (-not $ExpectVersion) { throw "-LocalAssets requires -ExpectVersion." }
@@ -175,7 +175,7 @@ try {
             exit 0
         }
         Step "Updating v$(Get-LocalVersion) -> v$newVersion ..."
-        # Exact asset name only — never the auto-generated GitHub source zipball.
+
         $zipName = "valorant-scout-v$newVersion.zip"
         $zipUrl = $null
         foreach ($a in $rel.assets) { if ($a.name -eq $zipName) { $zipUrl = $a.browser_download_url } }
@@ -204,27 +204,27 @@ try {
         New-Item -ItemType Directory -Path $staging | Out-Null
     }
 
-    # Free space: zip x3 (extracted tree + backup) plus slack.
+
     $needBytes = ((Get-Item $zip).Length * 3) + 200MB
     $drive = (Get-Item $Root).PSDrive
     if ($drive -and $null -ne $drive.Free -and $drive.Free -lt $needBytes) {
         throw "not enough free disk space to update safely (need ~$([Math]::Ceiling($needBytes / 1MB)) MB)."
     }
 
-    # ---- Extract into staging -------------------------------------------
-    # Expand-Archive uses .NET ZipFile, which rejects path-traversal entries and
-    # fails on a corrupt/truncated zip. The release ships only the source zip,
-    # served over HTTPS — no separate checksum/manifest step.
+
+
+
+
     Step "Extracting the download ..."
     $extract = Join-Path $staging "tree"
     Expand-Archive -Path $zip -DestinationPath $extract -Force
-    # Canonical LONG path: $env:TEMP can be a DOS 8.3 short path (Windows
-    # Sandbox: WDAGUT~1), while Get-ChildItem returns long FullNames — a
-    # Substring against the short prefix cuts the wrong byte count and mangles
-    # every relative path.
+
+
+
+
     $extract = (Get-Item -LiteralPath $extract).FullName
-    # Files live at the zip root. Tolerate an older single-folder layout too, so
-    # a release built the old way still applies.
+
+
     $newRoot = $extract
     if (-not (Test-Path (Join-Path $newRoot "backend"))) {
         $inner = Join-Path $extract "valorant-scout-v$newVersion"
@@ -249,22 +249,22 @@ try {
             throw "not enough free disk space for a transactional dependency update (need ~$([Math]::Ceiling($transactionBytes / 1MB)) MB)."
         }
     }
-    # The app's files = every file in the extracted release tree (relative
-    # paths). -Name yields RELATIVE paths directly — never Substring against
-    # $newRoot: a short-path prefix (8.3 TEMP) vs long FullNames would cut the
-    # wrong byte count and mangle every path.
+
+
+
+
     $newFiles = @(Get-ChildItem -Path $newRoot -Recurse -File -Name | ForEach-Object { [string]$_ })
     if ($newFiles.Count -lt 20) { throw "the downloaded release looks incomplete ($($newFiles.Count) files)." }
     Ok "Download extracted ($($newFiles.Count) files, v$newVersion)."
 
-    # ---- Plan the transaction ------------------------------------------
+
     foreach ($rel in $newFiles) {
         $null = Resolve-RepoPath $rel
         if (Test-Preserved $rel) { throw "the release tries to overwrite protected user data ('$rel') — refusing." }
     }
-    # No manifest: the release replaces its own files in place. A file dropped
-    # between versions is left as harmless dead weight (the app loads code by
-    # known names); Remove-LegacyCaches still clears stale bytecode.
+
+
+
 
     $backupDir = Join-Path $ScoutDir ("update-backup-" + (Get-LocalVersion))
     if (Test-Path $backupDir) { Remove-Item -Recurse -Force $backupDir }
@@ -294,7 +294,7 @@ try {
     Write-UpdateState $state
     Write-ScoutLog -Log update -Message "applying v$newVersion (backup at $backupDir)"
 
-    # ---- Apply -----------------------------------------------------------
+
     Step "Applying update v$newVersion (your settings and data are preserved) ..."
     try {
         foreach ($rel in $newFiles) {
@@ -303,16 +303,16 @@ try {
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
             Copy-Item -Force $src $dst
         }
-        # NB: overwriting the running start.bat/UPDATE.bat in place is SAFE only
-        # because those .bat files put their PowerShell hand-off and exit on a
-        # single line (`powershell ... & exit /b`) — cmd reads that whole line
-        # into memory before running it, so it never reopens the file at a stale
-        # byte offset afterwards. Do not split that line.
+
+
+
+
+
 
         $state.phase = "validate"
         Write-UpdateState $state
 
-        # ---- Validate the activated tree --------------------------------
+
         Step "Validating the updated installation ..."
         if ((Get-LocalVersion) -ne $newVersion) { throw "VERSION file mismatch after apply." }
 
@@ -328,9 +328,9 @@ try {
             Repair-Venv $exactPython
             Install-PyDeps
         } else {
-            # EAP=Continue: under the file-global Stop, PS5.1 turns a native
-            # command's stderr into a terminating error, which would pre-empt
-            # these friendly exit-code checks. Only $LASTEXITCODE decides here.
+
+
+
             $prevEap = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
@@ -344,8 +344,8 @@ try {
             } finally { $ErrorActionPreference = $prevEap }
         }
 
-        # Boot check: backend up = HTTP healthy AND the WS bridge bound and
-        # passed its own authenticated self-handshake (app.py exits 1 otherwise).
+
+
         $bport = Get-FreePort
         do { $wport = Get-FreePort } while ($wport -eq $bport)
         Note "Boot-checking the updated app (ports $bport/$wport) ..."
@@ -374,10 +374,10 @@ try {
             }
             if (-not $healthy) { throw "updated backend failed its boot health/WS check." }
         } finally {
-            # EAP=Continue: the graceful taskkill often can't kill a boot-check
-            # child (that's why /F follows), and under the file-global Stop its
-            # native stderr would become a terminating error that fails the whole
-            # update. Teardown must never be fatal.
+
+
+
+
             $prevBootEap = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
@@ -399,7 +399,7 @@ try {
             }
         }
 
-        # ---- Commit ------------------------------------------------------
+
         Remove-LegacyCaches
         Save-Markers (Get-SavedRegion)
         Remove-Item -Force $StateFile -ErrorAction SilentlyContinue

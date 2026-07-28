@@ -18,13 +18,14 @@ ALLOWED_COMMANDS = {
     "launch_offline",
     "offline_status",
     "offline_toggle",
+    "reset_session",
 }
 
 ACK_FIELDS = (
     "remoteUrl", "remoteSessionId", "side", "map", "status", "agent",
     "configured", "perMap", "rateLimited", "dedup",
     "queue", "queueId", "inQueue",
-    "running", "enabled", "connected", "friendsLoaded",
+    "running", "active", "enabled", "connected", "friendsLoaded",
 )
 
 RATE_LIMIT = 5
@@ -113,6 +114,8 @@ class CommandRouter:
                 return self._offline_status(payload)
             if command == "offline_toggle":
                 return self._offline_toggle(payload)
+            if command == "reset_session":
+                return self._reset_session(payload)
         except Exception as e:
             return {"ok": False, "message": f"Command failed: {e}"}
         return {"ok": False, "message": f"Unhandled command '{command}'."}
@@ -206,6 +209,10 @@ class CommandRouter:
             return offline_launch.set_status(str(payload.get("status")))
         return offline_launch.set_enabled(bool(payload.get("enabled", True)))
 
+    def _reset_session(self, _payload: dict) -> dict:
+        import session_tracker
+        return session_tracker.reset()
+
     def _enable_remote(self, _payload: dict) -> dict:
         if self.remote_controller is None:
             return {"ok": False, "configured": False,
@@ -226,7 +233,7 @@ if __name__ == "__main__":
     missing = surfaced - set(ACK_FIELDS)
     assert not missing, f"ACK_FIELDS is missing {sorted(missing)}"
 
-    for cmd in ("launch_offline", "offline_status", "offline_toggle"):
+    for cmd in ("launch_offline", "offline_status", "offline_toggle", "reset_session"):
         assert cmd in ALLOWED_COMMANDS, cmd
 
     print(f"scout_commands self-check OK ({len(ACK_FIELDS)} ack fields)")

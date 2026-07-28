@@ -33,6 +33,13 @@ _LOCK = threading.Lock()
 _CACHE: dict = {"at": 0.0, "data": None}
 _TTL = 600.0
 
+def last_good() -> dict | None:
+    with _LOCK:
+        if not _CACHE["data"]:
+            return None
+        return {**_CACHE["data"], "stale": True}
+
+
 def _contract_rewards() -> set:
     if "_contractskins" in valapi._cache:
         return valapi._cache["_contractskins"]

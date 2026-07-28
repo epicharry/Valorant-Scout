@@ -2,10 +2,10 @@
     [Parameter(Mandatory = $true)][string]$Zip
 )
 
-# Independent check of a built release zip: safe archive structure, forbidden
-# content, required files and launcher encodings. The release is a single zip
-# (no manifest/checksum assets) served over HTTPS, so there is nothing to
-# cross-check against - the updater boot-checks and rolls back at apply time.
+
+
+
+
 
 . (Join-Path $PSScriptRoot "common.ps1")
 
@@ -17,7 +17,7 @@ try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [System.IO.Compression.ZipFile]::ExtractToDirectory($Zip, $work)
 
-    # Files live at the zip root (no inner folder).
+
     $tree = $work
     if (-not (Test-Path (Join-Path $tree "VERSION"))) {
         Fail "zip must contain the app files at its root (VERSION not found)."; exit 1
@@ -25,7 +25,7 @@ try {
     $version = (Get-Content (Join-Path $tree "VERSION") -Raw).Trim()
 
     Step "Forbidden-content scan ..."
-    # Any-depth patterns, in lockstep with $ForbiddenPatterns in build-release.ps1.
+
     $forbidden = @('(^|/)\.env$', '\.env\.local', '(^|/)frontend/', '(^|/)node_modules/',
                    '(^|/)__pycache__/', '\.pyc$', '(^|/)\.venv/', '(^|/)\.scout/',
                    '(^|/)backend/data/', '(^|/)\.next/', '(^|/)\.git/', '(^|/)ops/',
@@ -60,6 +60,18 @@ try {
         if (($text -replace "`r`n", "") -match "`n") { Fail "$($file.Name) has LF-only line endings."; exit 1 }
     }
     Ok "required files present, encodings OK, VERSION agrees."
+
+    Step "Comment-free public-source policy ..."
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $VenvPy (Join-Path $PSScriptRoot "strip_comments.py") --check $tree
+        if ($LASTEXITCODE -ne 0) { Fail "Python comments/docstrings remain in the public artifact."; exit 1 }
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+            (Join-Path $PSScriptRoot "strip_script_comments.ps1") -Root $tree -Check
+        if ($LASTEXITCODE -ne 0) { Fail "PowerShell or batch comments remain in the public artifact."; exit 1 }
+    } finally { $ErrorActionPreference = $prevEap }
+    Ok "public artifact code is comment-free."
 
     Write-Host ""
     Ok "Artifact verified: $Zip (v$version)"

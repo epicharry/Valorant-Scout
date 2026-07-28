@@ -83,17 +83,21 @@ def strip_source(src: str) -> str:
     return "\n".join(cleaned).strip("\n") + "\n"
 
 
-def strip_file(path: str) -> tuple[int, int]:
+def strip_file(path: str, check: bool = False) -> tuple[int, int]:
     with open(path, encoding="utf-8") as fh:
         original = fh.read()
     stripped = strip_source(original)
     compile(stripped, path, "exec")
+    if check:
+        if stripped != original:
+            raise ValueError("comments or docstrings remain")
+        return len(original), len(original)
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(stripped)
     return len(original), len(stripped)
 
 
-def main(root: str) -> int:
+def main(root: str, check: bool = False) -> int:
     before = after = files = 0
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != "__pycache__"]
@@ -102,16 +106,21 @@ def main(root: str) -> int:
                 continue
             path = os.path.join(dirpath, name)
             try:
-                b, a = strip_file(path)
+                b, a = strip_file(path, check=check)
             except Exception as exc:
                 print(f"FAIL {os.path.relpath(path, root)}: {exc}", file=sys.stderr)
                 return 1
             before, after, files = before + b, after + a, files + 1
-    saved = 100 * (before - after) / before if before else 0
-    print(f"stripped {files} python files: {before:,} -> {after:,} bytes "
-          f"({saved:.1f}% smaller)")
+    if check:
+        print(f"verified {files} Python files contain no comments or docstrings")
+    else:
+        saved = 100 * (before - after) / before if before else 0
+        print(f"stripped {files} python files: {before:,} -> {after:,} bytes "
+              f"({saved:.1f}% smaller)")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else "."))
+    check_mode = "--check" in sys.argv[1:]
+    args = [arg for arg in sys.argv[1:] if arg != "--check"]
+    sys.exit(main(args[0] if args else ".", check=check_mode))

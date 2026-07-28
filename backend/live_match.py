@@ -192,8 +192,7 @@ class LiveMatch:
         self._content = None
 
     def _presences(self) -> list:
-        data = self.auth.local_get("/chat/v4/presences")
-        return (data or {}).get("presences", []) or []
+        return riot_client.chat_presences(self.auth)
 
     @staticmethod
     def _decode_private(private):
@@ -210,7 +209,7 @@ class LiveMatch:
             if p.get("puuid") != self.self_puuid:
                 continue
             if p.get("product") == "league_of_legends":
-                return "MENUS"
+                continue
             priv = self._decode_private(p.get("private"))
             if "matchPresenceData" in priv:
                 return priv["matchPresenceData"].get("sessionLoopState", "MENUS")

@@ -23,6 +23,7 @@ _STATE = {
     "recap": None,
     "recap_at": 0.0,
     "recorded": set(),
+    "generation": 0,
 }
 
 def _load_session() -> dict:
@@ -134,6 +135,21 @@ def _push_session_point(recap: dict) -> None:
     except Exception:
         pass
 
+
+def reset() -> dict:
+    now = int(time.time())
+    with _LOCK:
+        _STATE["generation"] += 1
+        _STATE["recorded"] = set()
+        _STATE["recap"] = None
+        _STATE["recap_at"] = 0.0
+        _SESSION.clear()
+        _SESSION.update({"startedAt": now, "lastAt": now, "points": []})
+        _save_session()
+    return {"ok": True, "startedAt": now,
+            "message": "Session RR reset. Rank trends were kept."}
+
+
 def observe(board: dict, lm) -> None:
     pass
     try:
@@ -159,14 +175,13 @@ def observe(board: dict, lm) -> None:
             if match_id in _STATE["recorded"]:
                 return
             _STATE["recorded"].add(match_id)
+            generation = _STATE["generation"]
 
         def _finish():
             try:
                 recap = _build_recap(lm, snap)
                 if not recap:
                     return
-                _STATE["recap"] = recap
-                _STATE["recap_at"] = time.time()
                 won = {"Victory": True, "Defeat": False}.get(recap.get("result"))
                 try:
                     encounter_log.record_result(snap, won)
@@ -175,7 +190,25 @@ def observe(board: dict, lm) -> None:
 
                 if (recap.get("mode") or "").lower() == "competitive":
                     with _LOCK:
-                        _push_session_point(recap)
+                        if generation == _STATE["generation"]:
+                            _STATE["recap"] = recap
+                            _STATE["recap_at"] = time.time()
+                            _push_session_point(recap)
+                        else:
+                            history.record({
+                                "matchId": recap["matchId"],
+                                "ts": int(time.time()),
+                                "map": recap.get("map"),
+                                "result": recap.get("result"),
+                                "delta": recap.get("rrDelta"),
+                                "tier": recap.get("tierAfter"),
+                                "rr": recap.get("rrAfter"),
+                            })
+                else:
+                    with _LOCK:
+                        if generation == _STATE["generation"]:
+                            _STATE["recap"] = recap
+                            _STATE["recap_at"] = time.time()
             except Exception:
                 pass
 

@@ -1,6 +1,6 @@
 ﻿param(
-    [string]$Region = "",     # na|eu|ap|kr|latam|br — skips the prompt (CI / noninteractive)
-    [switch]$Frontend         # dev only: also npm ci + build the local frontend
+    [string]$Region = "",
+    [switch]$Frontend
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
@@ -35,9 +35,9 @@ try {
         Write-ScoutLog -Log install -Message "venv healthy, skipping reinstall"
     } else {
         foreach ($r in $venv.Reasons) { Note "repair needed: $r"; Write-ScoutLog -Log install -Level WARN -Message "repair: $r" }
-        # A clean rebuild is deliberate. pip can report "already satisfied"
-        # when package files were quarantined/deleted but dist-info survived,
-        # and cannot then repair the import without a force reinstall.
+
+
+
         Repair-Venv $py
         Install-PyDeps
     }
@@ -81,7 +81,7 @@ try {
             if ($r -match '^\d+$' -and [int]$r -ge 1 -and [int]$r -le $regions.Count) {
                 $choice = $regions[[int]$r - 1]
             } elseif (-not $r) {
-                # Read-Host returns "" instantly on redirected/exhausted stdin - bail instead of looping forever
+
                 if (++$blanks -ge 5) { throw "No region was selected. Run install.bat again and enter a number (1-$($regions.Count))." }
             } else { $blanks = 0; Warn2 "Please enter a number between 1 and $($regions.Count)." }
         }

@@ -1,7 +1,7 @@
 ﻿. (Join-Path $PSScriptRoot "common.ps1")
 
-# backend/requirements.txt is the sole Python lock: every active line must be
-# an exact == pin (transitive closure included, verified by pip check in CI).
+
+
 
 $bad = 0
 $lines = Get-Content (Join-Path $Root "backend\requirements.txt") -Encoding UTF8

@@ -1,7 +1,7 @@
 ﻿. (Join-Path $PSScriptRoot "common.ps1")
 
-# One version, everywhere. VERSION is the source of truth; runtime.json must
-# agree; the protocol constant must agree across backend and frontend.
+
+
 
 $bad = 0
 $v = Get-LocalVersion
@@ -24,7 +24,7 @@ if (Test-Path $transport) {
         else { Ok "frontend protocol == runtime.json ($($Matches[1]))" }
     } else { Fail "transport.js has no PROTOCOL_VERSION"; $bad = 1 }
 
-    # APP_LATEST is "newest published release" — it may lag VERSION but must never lead it.
+
     $dash = Get-Content (Join-Path $Root "frontend\components\Dashboard.js") -Raw -Encoding UTF8
     if ($dash -match 'APP_LATEST\s*=\s*"([^"]+)"') {
         if ((Compare-ScoutVersion $Matches[1] $v) -gt 0) { Fail "frontend APP_LATEST '$($Matches[1])' is AHEAD of VERSION '$v'"; $bad = 1 }

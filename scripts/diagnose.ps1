@@ -1,10 +1,10 @@
 ﻿param(
-    [switch]$Bundle,           # also write a sanitized support ZIP to the Desktop
-    [string]$BundlePath = ""   # override the ZIP location (tests)
+    [switch]$Bundle,
+    [string]$BundlePath = ""
 )
 
-# Diagnostics must work even when .venv is broken — everything here is plain
-# PowerShell; Python is only probed, never required.
+
+
 
 . (Join-Path $PSScriptRoot "common.ps1")
 
@@ -19,7 +19,7 @@ function Good([string]$line) { DiagLine "[OK] $line" }
 Write-Host ""
 Write-Host "  VALORANT SCOUT - DIAGNOSTICS" -ForegroundColor Red
 
-# ---- App ------------------------------------------------------------------
+
 RSection "App"
 DiagLine "version: $(Get-LocalVersion)"
 try {
@@ -32,7 +32,7 @@ if (Test-Path $relMf) {
     try { DiagLine "release commit: $((Get-Content $relMf -Raw | ConvertFrom-Json).commit)" } catch { }
 } else { DiagLine "release commit: n/a (developer or pre-manifest tree)" }
 
-# ---- Windows / shells -------------------------------------------------------
+
 RSection "Windows"
 $os = [Environment]::OSVersion.Version
 DiagLine "windows: $($os.Major).$($os.Minor) build $($os.Build), 64-bit OS: $([Environment]::Is64BitOperatingSystem)"
@@ -45,7 +45,7 @@ if ($pwsh) {
     try { DiagLine "powershell 7: $((& pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()' 2>$null))" } catch { DiagLine "powershell 7: present" }
 } else { DiagLine "powershell 7: not installed (fine - not required)" }
 
-# ---- Install path -----------------------------------------------------------
+
 RSection "Install path"
 $special = @()
 if ($Root -match '\s') { $special += "spaces" }
@@ -74,7 +74,7 @@ try {
     if ($drive.Free -lt 2GB) { Bad "less than 2 GB free" }
 } catch { }
 
-# ---- Python / venv ----------------------------------------------------------
+
 RSection "Python"
 try {
     $py = Find-ExactPython
@@ -98,12 +98,12 @@ $markers = Test-Markers
 if ($markers.Ok) { Good "install markers valid (schema $MarkerSchemaVersion)" }
 else { Bad "install markers: $($markers.Reason)" }
 
-# ---- Ports ------------------------------------------------------------------
+
 RSection "Ports"
 function Get-PortOwner([int]$port) {
-    # Get-NetTCPConnection over netstat: netstat's state column is localized
-    # ("ABHÖREN", "À L'ÉCOUTE"), so matching "LISTENING" finds nothing on
-    # non-English Windows — and its stderr would abort under the global EAP=Stop.
+
+
+
     $conns = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
     foreach ($c in $conns) {
         $portPid = $c.OwningProcess
@@ -111,9 +111,9 @@ function Get-PortOwner([int]$port) {
             $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$portPid" -ErrorAction Stop
             $exe = $proc.ExecutablePath
             $rootLower = $Root.ToLower()
-            # Boundary match: a bare StartsWith/Contains also claims sibling folders
-            # like "...ValorantScout-old" as ours. Require exact equality or the
-            # root followed by a path separator.
+
+
+
             if ($exe) {
                 $exeLower = $exe.ToLower()
                 if ($exeLower -eq $rootLower -or $exeLower.StartsWith($rootLower + '\')) { return "ours (Valorant Scout, PID $portPid)" }
@@ -141,7 +141,7 @@ if (Test-Path $runtimeState) {
         $rp = Get-CimInstance Win32_Process -Filter "ProcessId=$($rs.pid)" -ErrorAction Stop
         $identity = (($rp.ExecutablePath + " " + $rp.CommandLine) + "").ToLowerInvariant()
         $rootLower = $Root.ToLowerInvariant()
-        # Boundary match so a sibling folder ("...-old") can't masquerade as ours.
+
         if ($identity -eq $rootLower -or $identity.Contains($rootLower + '\')) {
             $backendPort = [int]$rs.backendPort
             $wsPort = [int]$rs.wsPort
@@ -154,7 +154,7 @@ if (Test-Path $runtimeState) {
 DiagLine "backend port $backendPort`: $(Get-PortOwner $backendPort)"
 DiagLine "websocket port $wsPort`: $(Get-PortOwner $wsPort)"
 
-# ---- Running app health -----------------------------------------------------
+
 RSection "Running app"
 try {
     $h = Invoke-RestMethod -Uri "http://127.0.0.1:$backendPort/api/health" -TimeoutSec 3
@@ -167,7 +167,7 @@ try {
     }
 } catch { DiagLine "backend: not running (start it with start.bat)" }
 
-# ---- Riot / Discord ---------------------------------------------------------
+
 RSection "Riot & Discord"
 $lockfile = Join-Path $env:LOCALAPPDATA "Riot Games\Riot Client\Config\lockfile"
 if (Test-Path $lockfile) {
@@ -175,7 +175,7 @@ if (Test-Path $lockfile) {
         $null = [System.IO.File]::ReadAllText($lockfile)
         Good "Riot lockfile present and readable (Riot Client is running)"
     } catch {
-        # VS-RIOT-001: present but unreadable — permissions or an exotic lock.
+
         Bad "VS-RIOT-001 Riot lockfile exists but can't be read - try restarting the Riot Client"
     }
 } else {
@@ -185,7 +185,7 @@ $discord = $false
 foreach ($i in 0..3) { if (Test-Path "\\.\pipe\discord-ipc-$i") { $discord = $true; break } }
 DiagLine "Discord desktop: $(if ($discord) { 'running (Rich Presence possible)' } else { 'not detected (Rich Presence off)' })"
 
-# ---- Network ----------------------------------------------------------------
+
 RSection "Network"
 $frontend = "https://valorantscout.com"
 if (Test-Path $EnvFile) {
@@ -202,7 +202,7 @@ try {
     Good "update endpoint reachable"
 } catch { DiagLine "update endpoint: not reachable (updates would be skipped)" }
 
-# ---- Recent errors ----------------------------------------------------------
+
 RSection "Recent errors (sanitized)"
 $any = $false
 foreach ($log in @("launcher", "install", "update", "backend", "backend-console", "websocket", "cli", "crash")) {
@@ -215,7 +215,7 @@ foreach ($log in @("launcher", "install", "update", "backend", "backend-console"
 }
 if (-not $any) { DiagLine "none found" }
 
-# ---- Support bundle ---------------------------------------------------------
+
 if ($Bundle) {
     RSection "Support bundle"
     $dest = $BundlePath
@@ -226,8 +226,8 @@ if ($Bundle) {
     $work = Join-Path $env:TEMP ("vs-bundle-" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $work | Out-Null
     try {
-        # STRICT allowlist. Everything copied in is redacted line by line —
-        # never raw log files, never .env, never backend/data.
+
+
         Write-FileNoBom (Join-Path $work "diagnose-report.txt") (($report | ForEach-Object { Protect-ScoutText $_ }) -join "`r`n")
         foreach ($rel in @("VERSION", "runtime.json", "release-manifest.json")) {
             $p = Join-Path $Root $rel

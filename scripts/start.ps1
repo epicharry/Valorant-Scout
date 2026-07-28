@@ -1,14 +1,14 @@
 ﻿. (Join-Path $PSScriptRoot "common.ps1")
 
-# This console is VISIBLE (start.bat runs us directly) and it IS the app's
-# window: a clean branded progress display, then run.py takes over inline and
-# the scoreboard renders right here - one window for everything. Internals go
-# to launcher.log. Startup NEVER installs anything - it validates fast
-# (offline) and auto-applies any pending update before launching.
 
-# ---- friendly one-line progress bar ----------------------------------------
-# CP437-safe glyphs only (block chars exist in the OEM codepage), PS 5.1-safe
-# syntax only. One line, redrawn in place with a carriage return.
+
+
+
+
+
+
+
+
 $Script:PhaseTotal = 4
 function Show-Phase([int]$step, [string]$text) {
     $width = 22
@@ -16,7 +16,7 @@ function Show-Phase([int]$step, [string]$text) {
     if ($filled -gt $width) { $filled = $width }
     $bar = ("$([char]0x2588)" * $filled) + ("$([char]0x2591)" * ($width - $filled))
     $line = "  [$bar]  $text"
-    # pad so a shorter message fully overwrites the previous one
+
     Write-Host ("`r" + $line.PadRight(70)) -NoNewline -ForegroundColor Gray
 }
 function Finish-Progress([string]$text) {
@@ -31,7 +31,7 @@ Write-Host ""
 
 Write-ScoutLog -Log launcher -Message "startup requested (v$(Get-LocalVersion))"
 
-# ---- 1/4 validate the installation (offline, fast) --------------------------
+
 Show-Phase 1 "Checking your installation..."
 $markers = Test-Markers
 if (-not $markers.Ok) {
@@ -52,11 +52,11 @@ if (-not $venv.Ok) {
     exit 1
 }
 
-# ---- 2/4 auto-update (always on) --------------------------------------------
-# Every launch checks GitHub for a newer release and applies it BEFORE launching.
-# Degrades safely: a failed check (offline) or failed update (rolled back) just
-# launches the current version, which retries next launch. Skipped on a
-# developer checkout (.git) - updates come from git there.
+
+
+
+
+
 Show-Phase 2 "Checking for updates..."
 if (-not (Test-Path (Join-Path $Root ".git"))) {
     try {
@@ -74,7 +74,7 @@ if (-not (Test-Path (Join-Path $Root ".git"))) {
                 Write-Host "  Updated to v$(Get-LocalVersion)." -ForegroundColor Green
                 Write-Host ""
             } else {
-                # Rolled back or couldn't apply; launch anyway and let the UI nudge.
+
                 $env:VS_UPDATE_AVAILABLE = $tag
                 Write-ScoutLog -Log launcher -Level WARN -Message "auto-update to $tag failed (rc=$LASTEXITCODE); launching current version"
                 Write-Host "  Couldn't install the update - starting your current version." -ForegroundColor Yellow
@@ -86,16 +86,16 @@ if (-not (Test-Path (Join-Path $Root ".git"))) {
     }
 }
 
-# ---- 3/4 take over from any previous instance --------------------------------
+
 Show-Phase 3 "Starting Valorant Scout..."
 Stop-RunningApp "launcher" | Out-Null
 
-# ---- 4/4 hand off to run.py INLINE (single-window mode) ----------------------
-# run.py runs IN THIS CONSOLE: it stays quiet (VS_ATTACHED_CLI routes its chatter
-# to launcher.log), starts the backend invisibly, and opens the scoreboard right
-# here - the progress bar simply becomes the scoreboard. Closing this window
-# closes the whole app. VS_PREVALIDATED skips run.py re-running the dependency
-# probes Test-Venv just ran.
+
+
+
+
+
+
 Finish-Progress "Opening the scoreboard..."
 $env:VS_PREVALIDATED = "1"
 $env:VS_ATTACHED_CLI = "1"
