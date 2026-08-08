@@ -1,4 +1,4 @@
-﻿param(
+param(
     [switch]$DevOverride,
     [string]$LocalAssets = "",
     [string]$ExpectVersion = "",
