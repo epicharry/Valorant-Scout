@@ -117,37 +117,21 @@ if __name__ == "__main__":
             "Premier_GetPremierConferences": f"/premier/v1/affinities/{shard}/conferences",
         }
 
-        results = {}
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        out_dir = f"premier_raw_{timestamp}"
+        os.makedirs(out_dir, exist_ok=True)
+
+        print()
         for name, path in endpoints.items():
             url = pd_base + path
-            results[name] = pd_get(url, headers)
+            data = pd_get(url, headers)
+            filepath = os.path.join(out_dir, f"{name}.json")
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
 
-        output = {
-            "_meta": {
-                "puuid": puuid,
-                "shard": shard,
-                "client_version": client_version,
-                "timestamp": datetime.now().isoformat(),
-            },
-            "responses": results,
-        }
-
-        filename = f"premier_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(output, f, indent=2)
-
-        print(f"\nAll responses saved to {filename}")
-
-        print("\n--- Summary ---")
-        for name, data in results.items():
-            if isinstance(data, dict):
-                keys = [k for k in data.keys() if not k.startswith("_")]
-                preview = ", ".join(keys[:5])
-                if len(keys) > 5:
-                    preview += f", ... (+{len(keys) - 5} more)"
-                print(f"  {name}: {{{preview}}}")
-            else:
-                print(f"  {name}: {type(data).__name__}")
+        print(f"\nResponses saved to {out_dir}/")
+        for fname in os.listdir(out_dir):
+            print(f"  {fname}")
 
         print("\nNote: Premier_CreateRoster_V2 (POST) was skipped to avoid "
               "modifying your account.")
