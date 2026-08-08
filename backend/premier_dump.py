@@ -106,7 +106,13 @@ if __name__ == "__main__":
 
         print(f"Region: {shard}")
         print(f"Client version: {client_version}")
-        print(f"PUUID: {puuid}")
+        print(f"Own PUUID: {puuid}")
+
+        custom = input("\nEnter a PUUID to look up (or press Enter to use your own): ").strip()
+        if custom:
+            puuid = custom
+            print(f"Using PUUID: {puuid}")
+
         print(f"\nFetching Premier endpoints...\n")
 
         endpoints = {
